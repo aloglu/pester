@@ -71,7 +71,7 @@ fn add_reminder(
 ) -> Result<()> {
     validate_id(&id)?;
     parse_time(&time)?;
-    humantime::parse_duration(&every).context("repeat interval must look like 5m, 30m, or 1h")?;
+    parse_repeat_interval(&every)?;
 
     let mut config = store.load_config()?;
     if config.reminder(&id).is_some() {
@@ -111,8 +111,7 @@ fn set_reminder(
         reminder.time = time;
     }
     if let Some(every) = every {
-        humantime::parse_duration(&every)
-            .context("repeat interval must look like 5m, 30m, or 1h")?;
+        parse_repeat_interval(&every)?;
         changes.push(format!("repeat: {} -> {}", reminder.repeat_every, every));
         reminder.repeat_every = every;
     }
@@ -426,9 +425,18 @@ pub(crate) fn parse_time(time: &str) -> Result<NaiveTime> {
     NaiveTime::parse_from_str(time, "%H:%M").context("time must be in 24-hour HH:MM format")
 }
 
+pub(crate) fn parse_repeat_interval(every: &str) -> Result<std::time::Duration> {
+    let duration = humantime::parse_duration(every)
+        .context("repeat interval must look like 5m, 30m, or 1h")?;
+    if duration.is_zero() {
+        bail!("repeat interval must be greater than zero");
+    }
+    Ok(duration)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_time, validate_id};
+    use super::{parse_repeat_interval, parse_time, validate_id};
 
     #[test]
     fn validates_reminder_ids() {
@@ -451,5 +459,15 @@ mod tests {
         assert!(parse_time("24:00").is_err());
         assert!(parse_time("9:00").is_err());
         assert!(parse_time("09:0").is_err());
+    }
+
+    #[test]
+    fn validates_repeat_intervals() {
+        assert_eq!(
+            parse_repeat_interval("5m").unwrap(),
+            std::time::Duration::from_secs(300)
+        );
+        assert!(parse_repeat_interval("0s").is_err());
+        assert!(parse_repeat_interval("soon").is_err());
     }
 }

@@ -134,3 +134,74 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(&tmp, path).with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use chrono::NaiveDate;
+
+    use super::Store;
+    use crate::models::{Config, Reminder, State};
+    use crate::paths::Paths;
+
+    fn temp_store(name: &str) -> (std::path::PathBuf, Store) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("pester-{name}-{unique}"));
+        let config_dir = root.join("config");
+        let state_dir = root.join("state");
+        let paths = Paths {
+            config_file: config_dir.join("config.toml"),
+            state_file: state_dir.join("state.json"),
+            config_dir,
+            state_dir,
+        };
+        (root, Store { paths })
+    }
+
+    #[test]
+    fn saves_and_loads_config_and_state() {
+        let (root, store) = temp_store("roundtrip");
+        let config = Config {
+            reminders: vec![Reminder {
+                id: "winddown".to_string(),
+                title: "Wind down".to_string(),
+                message: "No exciting stuff now.".to_string(),
+                time: "22:00".to_string(),
+                repeat_every: "5m".to_string(),
+                enabled: true,
+            }],
+            confirmation: Default::default(),
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+        let mut state = State::default();
+        state.mark_done(date, "winddown");
+
+        store.save_config(&config).unwrap();
+        store.save_state(&state).unwrap();
+
+        let loaded_config = store.load_config().unwrap();
+        let loaded_state = store.load_state().unwrap();
+        assert_eq!(loaded_config.reminders[0].id, "winddown");
+        assert!(loaded_state.get(date, "winddown").unwrap().done);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn delete_data_removes_config_and_state_directories() {
+        let (root, store) = temp_store("delete-data");
+        std::fs::create_dir_all(&store.paths.config_dir).unwrap();
+        std::fs::create_dir_all(&store.paths.state_dir).unwrap();
+
+        store.delete_data().unwrap();
+
+        assert!(!store.paths.config_dir.exists());
+        assert!(!store.paths.state_dir.exists());
+
+        std::fs::remove_dir_all(root).ok();
+    }
+}

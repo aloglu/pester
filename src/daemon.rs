@@ -6,6 +6,7 @@ use chrono::{DateTime, Local, NaiveTime};
 
 use crate::models::{Config, Reminder, State};
 use crate::notify;
+use crate::parse_repeat_interval;
 use crate::store::Store;
 
 pub fn run(store: Store) -> Result<()> {
@@ -22,21 +23,32 @@ fn tick(store: &Store) -> Result<()> {
     let config = store.load_config()?;
     let mut state = store.load_state()?;
     let now = Local::now();
-    let mut changed = false;
+    deliver_due_reminders(&config, &mut state, now, notify::send, |state| {
+        store.save_state(state)
+    })
+}
 
-    for reminder_id in due_reminders(&config, &state, now)? {
+fn deliver_due_reminders<F, S>(
+    config: &Config,
+    state: &mut State,
+    now: DateTime<Local>,
+    mut notify: F,
+    mut save_state: S,
+) -> Result<()>
+where
+    F: FnMut(&Reminder) -> Result<()>,
+    S: FnMut(&State) -> Result<()>,
+{
+    for reminder_id in due_reminders(config, state, now)? {
         let reminder = config
             .reminder(&reminder_id)
             .with_context(|| format!("reminder \"{reminder_id}\" disappeared during tick"))?;
-        notify::send(reminder)?;
+        notify(reminder)
+            .with_context(|| format!("failed to send notification for {}", reminder.id))?;
         state
             .entry_mut(now.date_naive(), &reminder.id)
             .last_notified_at = Some(now.to_rfc3339());
-        changed = true;
-    }
-
-    if changed {
-        store.save_state(&state)?;
+        save_state(state)?;
     }
 
     Ok(())
@@ -81,14 +93,16 @@ fn should_notify(
     now: DateTime<Local>,
 ) -> Result<bool> {
     let Some(last_notified_at) = last_notified_at else {
+        parse_repeat_interval(&reminder.repeat_every)
+            .with_context(|| format!("invalid repeat interval for {}", reminder.id))?;
         return Ok(true);
     };
 
+    let repeat = parse_repeat_interval(&reminder.repeat_every)
+        .with_context(|| format!("invalid repeat interval for {}", reminder.id))?;
     let last = DateTime::parse_from_rfc3339(last_notified_at)
         .with_context(|| format!("invalid last notification timestamp for {}", reminder.id))?
         .with_timezone(&Local);
-    let repeat = humantime::parse_duration(&reminder.repeat_every)
-        .with_context(|| format!("invalid repeat interval for {}", reminder.id))?;
 
     Ok(now.signed_duration_since(last).to_std().unwrap_or_default() >= repeat)
 }
@@ -104,9 +118,12 @@ fn duration_until_next_second(now: DateTime<Local>) -> Duration {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::bail;
     use chrono::{Local, TimeZone, Timelike};
 
-    use super::{due_reminders, duration_until_next_second, is_due, should_notify};
+    use super::{
+        deliver_due_reminders, due_reminders, duration_until_next_second, is_due, should_notify,
+    };
     use crate::models::{Config, Reminder, State};
 
     fn reminder(time: &str, repeat_every: &str) -> Reminder {
@@ -150,6 +167,14 @@ mod tests {
     fn notify_when_never_notified() {
         let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 0, 0).unwrap();
         assert!(should_notify(&reminder("22:00", "5m"), None, now).unwrap());
+    }
+
+    #[test]
+    fn rejects_invalid_repeat_interval_before_first_notification() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 0, 0).unwrap();
+
+        assert!(should_notify(&reminder("22:00", "0s"), None, now).is_err());
+        assert!(should_notify(&reminder("22:00", "soon"), None, now).is_err());
     }
 
     #[test]
@@ -260,6 +285,45 @@ mod tests {
             due_reminders(&config, &state, now).unwrap(),
             vec!["meds", "winddown"]
         );
+    }
+
+    #[test]
+    fn saves_state_after_each_successful_notification_before_later_failure() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 0, 0).unwrap();
+        let config = config(vec![
+            reminder_with_id("meds", "14:00", "5m"),
+            reminder_with_id("winddown", "22:00", "5m"),
+        ]);
+        let mut state = State::default();
+        let mut sent = Vec::new();
+        let mut saved = Vec::new();
+
+        let error = deliver_due_reminders(
+            &config,
+            &mut state,
+            now,
+            |reminder| {
+                if reminder.id == "winddown" {
+                    bail!("notification backend failed");
+                }
+                sent.push(reminder.id.clone());
+                Ok(())
+            },
+            |state| {
+                saved.push(state.clone());
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to send notification"));
+        assert_eq!(sent, vec!["meds"]);
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0]
+            .get(now.date_naive(), "meds")
+            .and_then(|entry| entry.last_notified_at.as_deref())
+            .is_some());
+        assert!(saved[0].get(now.date_naive(), "winddown").is_none());
     }
 
     #[test]

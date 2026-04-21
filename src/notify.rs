@@ -330,6 +330,6 @@ mod platform {
     }
 
     pub fn diagnostics() -> Vec<String> {
-        vec!["notifications: unsupported platform".to_string()]
+        vec![format!("notifications: {}", diagnose())]
     }
 }

@@ -114,4 +114,21 @@ mod tests {
         assert_eq!(decoded.reminders[0].id, "winddown");
         assert_eq!(decoded.reminders[0].time, "22:00");
     }
+
+    #[test]
+    fn deserializes_missing_enabled_as_true() {
+        let decoded: Config = toml::from_str(
+            r#"
+[[reminders]]
+id = "winddown"
+title = "Wind down"
+message = "No exciting stuff now."
+time = "22:00"
+repeat_every = "5m"
+"#,
+        )
+        .unwrap();
+
+        assert!(decoded.reminders[0].enabled);
+    }
 }

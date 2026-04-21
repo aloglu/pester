@@ -17,6 +17,7 @@ pub fn diagnostics(paths: &Paths) -> Vec<String> {
 #[cfg(target_os = "linux")]
 mod platform {
     use std::fs;
+    use std::path::Path;
     use std::process::Command;
 
     use anyhow::{Context, Result};
@@ -28,10 +29,7 @@ mod platform {
         let service_dir = dirs_home()?.join(".config/systemd/user");
         fs::create_dir_all(&service_dir)?;
         let service_file = service_dir.join("pester.service");
-        let content = format!(
-            "[Unit]\nDescription=Pester reminder daemon\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
-            exe.display()
-        );
+        let content = service_content(&exe);
         fs::write(&service_file, content)
             .with_context(|| format!("failed to write {}", service_file.display()))?;
         run("systemctl", &["--user", "daemon-reload"])?;
@@ -97,6 +95,63 @@ mod platform {
         directories::BaseDirs::new()
             .map(|dirs| dirs.home_dir().to_path_buf())
             .context("could not determine home directory")
+    }
+
+    fn service_content(exe: &Path) -> String {
+        format!(
+            "[Unit]\nDescription=Pester reminder daemon\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+            systemd_quote_arg(&exe.display().to_string())
+        )
+    }
+
+    fn systemd_quote_arg(value: &str) -> String {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        quoted.push('"');
+        for ch in value.chars() {
+            match ch {
+                '\\' => quoted.push_str("\\\\"),
+                '"' => quoted.push_str("\\\""),
+                '$' => quoted.push_str("$$"),
+                '%' => quoted.push_str("%%"),
+                _ => quoted.push(ch),
+            }
+        }
+        quoted.push('"');
+        quoted
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::path::Path;
+
+        use super::{service_content, systemd_quote_arg};
+
+        #[test]
+        fn quotes_systemd_exec_start_arguments() {
+            assert_eq!(
+                systemd_quote_arg("/home/me/Pester App/pester"),
+                "\"/home/me/Pester App/pester\""
+            );
+            assert_eq!(
+                systemd_quote_arg("/home/me/pester\"beta"),
+                "\"/home/me/pester\\\"beta\""
+            );
+            assert_eq!(
+                systemd_quote_arg("/home/me/$pester"),
+                "\"/home/me/$$pester\""
+            );
+            assert_eq!(
+                systemd_quote_arg("/home/me/%pester"),
+                "\"/home/me/%%pester\""
+            );
+        }
+
+        #[test]
+        fn service_file_quotes_executable_path() {
+            let content = service_content(Path::new("/home/me/Pester App/pester"));
+
+            assert!(content.contains("ExecStart=\"/home/me/Pester App/pester\" daemon"));
+        }
     }
 }
 
