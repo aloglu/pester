@@ -14,7 +14,7 @@ pub fn run(store: Store) -> Result<()> {
         if let Err(error) = tick(&store) {
             tracing::error!("{error:#}");
         }
-        thread::sleep(Duration::from_secs(30));
+        thread::sleep(duration_until_next_second(Local::now()));
     }
 }
 
@@ -93,11 +93,20 @@ fn should_notify(
     Ok(now.signed_duration_since(last).to_std().unwrap_or_default() >= repeat)
 }
 
+fn duration_until_next_second(now: DateTime<Local>) -> Duration {
+    let nanos = now.timestamp_subsec_nanos();
+    if nanos == 0 {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_nanos(1_000_000_000 - u64::from(nanos))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use chrono::{Local, TimeZone};
+    use chrono::{Local, TimeZone, Timelike};
 
-    use super::{due_reminders, is_due, should_notify};
+    use super::{due_reminders, duration_until_next_second, is_due, should_notify};
     use crate::models::{Config, Reminder, State};
 
     fn reminder(time: &str, repeat_every: &str) -> Reminder {
@@ -250,6 +259,30 @@ mod tests {
         assert_eq!(
             due_reminders(&config, &state, now).unwrap(),
             vec!["meds", "winddown"]
+        );
+    }
+
+    #[test]
+    fn daemon_sleep_aligns_to_next_second() {
+        let now = Local
+            .with_ymd_and_hms(2026, 4, 21, 22, 0, 0)
+            .unwrap()
+            .with_nanosecond(250_000_000)
+            .unwrap();
+
+        assert_eq!(
+            duration_until_next_second(now),
+            std::time::Duration::from_millis(750)
+        );
+    }
+
+    #[test]
+    fn daemon_sleep_waits_one_second_when_already_aligned() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 0, 0).unwrap();
+
+        assert_eq!(
+            duration_until_next_second(now),
+            std::time::Duration::from_secs(1)
         );
     }
 }

@@ -248,7 +248,7 @@ mod platform {
     use windows::Win32::UI::Shell::{
         FOLDERID_StartMenu, FOLDERID_Startup, IShellLinkW, SHGetKnownFolderPath, ShellLink,
     };
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWNORMAL};
 
     use crate::app::{APP_ID, APP_NAME};
     use crate::paths::Paths;
@@ -273,6 +273,7 @@ mod platform {
     pub fn uninstall(_paths: &Paths) -> Result<()> {
         let _ = run("schtasks", &["/End", "/TN", "Pester"]);
         let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
+        let _ = stop_daemon_processes();
         let _ = remove_start_menu_shortcut();
         let _ = remove_startup_shortcut();
         Ok(())
@@ -345,6 +346,17 @@ mod platform {
         Ok(())
     }
 
+    fn stop_daemon_processes() -> Result<()> {
+        let current_pid = std::process::id();
+        let script = format!(
+            "$CurrentPid = {current_pid}; \
+             Get-CimInstance Win32_Process -Filter \"Name = 'pester.exe'\" | \
+             Where-Object {{ $_.ProcessId -ne $CurrentPid -and $_.CommandLine -like '* daemon*' }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        );
+        run("powershell", &["-NoProfile", "-Command", &script])
+    }
+
     fn run(program: &str, args: &[&str]) -> Result<()> {
         let output = Command::new(program).args(args).output()?;
         if !output.status.success() {
@@ -370,6 +382,7 @@ mod platform {
             exe,
             "daemon",
             "Pester reminder daemon",
+            SW_SHOWNORMAL,
         )
     }
 
@@ -379,6 +392,7 @@ mod platform {
             exe,
             "daemon",
             "Start Pester reminder daemon at login",
+            SW_HIDE,
         )
     }
 
@@ -387,6 +401,7 @@ mod platform {
         exe: &std::path::Path,
         arguments: &str,
         description: &str,
+        show_command: SHOW_WINDOW_CMD,
     ) -> Result<()> {
         let _com = ComApartment::new()?;
         if let Some(parent) = shortcut_path.parent() {
@@ -406,7 +421,7 @@ mod platform {
                 .SetDescription(&HSTRING::from(description))
                 .context("could not set Pester shortcut description")?;
             shell_link
-                .SetShowCmd(SW_SHOWNORMAL)
+                .SetShowCmd(show_command)
                 .context("could not set Pester shortcut show command")?;
 
             let property_store: IPropertyStore = shell_link

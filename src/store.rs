@@ -87,6 +87,8 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
 
 #[cfg(target_os = "windows")]
 fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
+    use std::os::windows::process::CommandExt;
+
     let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
         return Ok(None);
     };
@@ -99,11 +101,18 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
     }
 
     let script = format!(
-        "Start-Sleep -Seconds 2; Remove-Item -LiteralPath '{}' -Force",
+        "Start-Sleep -Milliseconds 500; \
+         for ($i = 0; $i -lt 20; $i++) {{ \
+           try {{ Remove-Item -LiteralPath '{}' -Force -ErrorAction Stop; exit 0 }} \
+           catch {{ Start-Sleep -Milliseconds 500 }} \
+         }}",
         current.display().to_string().replace('\'', "''")
     );
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
     std::process::Command::new("powershell")
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .args(["-NoProfile", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .with_context(|| format!("failed to schedule removal of {}", current.display()))?;
     Ok(Some(current.to_path_buf()))
