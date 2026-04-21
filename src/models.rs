@@ -1,0 +1,117 @@
+use std::collections::BTreeMap;
+
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Config {
+    #[serde(default)]
+    pub reminders: Vec<Reminder>,
+    #[serde(default)]
+    pub confirmation: Confirmation,
+}
+
+impl Config {
+    pub fn reminder(&self, id: &str) -> Option<&Reminder> {
+        self.reminders.iter().find(|reminder| reminder.id == id)
+    }
+
+    pub fn reminder_mut(&mut self, id: &str) -> Option<&mut Reminder> {
+        self.reminders.iter_mut().find(|reminder| reminder.id == id)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Reminder {
+    pub id: String,
+    pub title: String,
+    pub message: String,
+    pub time: String,
+    pub repeat_every: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Confirmation {
+    #[serde(default)]
+    pub done_phrase: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct State {
+    #[serde(default)]
+    pub days: BTreeMap<String, BTreeMap<String, ReminderDayState>>,
+}
+
+impl State {
+    pub fn get(&self, date: NaiveDate, reminder_id: &str) -> Option<&ReminderDayState> {
+        self.days
+            .get(&date.to_string())
+            .and_then(|day| day.get(reminder_id))
+    }
+
+    pub fn entry_mut(&mut self, date: NaiveDate, reminder_id: &str) -> &mut ReminderDayState {
+        self.days
+            .entry(date.to_string())
+            .or_default()
+            .entry(reminder_id.to_string())
+            .or_default()
+    }
+
+    pub fn mark_done(&mut self, date: NaiveDate, reminder_id: &str) {
+        self.entry_mut(date, reminder_id).done = true;
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ReminderDayState {
+    #[serde(default)]
+    pub done: bool,
+    #[serde(default)]
+    pub last_notified_at: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+
+    use super::{Config, Reminder, State};
+
+    #[test]
+    fn marks_individual_reminder_done_for_date() {
+        let mut state = State::default();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+
+        state.mark_done(date, "winddown");
+
+        assert!(state.get(date, "winddown").unwrap().done);
+        assert!(state.get(date, "meds").is_none());
+    }
+
+    #[test]
+    fn serializes_config_as_toml() {
+        let config = Config {
+            reminders: vec![Reminder {
+                id: "winddown".to_string(),
+                title: "Wind down".to_string(),
+                message: "No exciting stuff now.".to_string(),
+                time: "22:00".to_string(),
+                repeat_every: "5m".to_string(),
+                enabled: true,
+            }],
+            confirmation: Default::default(),
+        };
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.reminders.len(), 1);
+        assert_eq!(decoded.reminders[0].id, "winddown");
+        assert_eq!(decoded.reminders[0].time, "22:00");
+    }
+}

@@ -1,0 +1,158 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  checks:
+    name: checks linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu,x86_64-apple-darwin
+          components: rustfmt,clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Test
+        run: cargo test
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check Linux
+        run: cargo check
+
+      - name: Check Windows target
+        run: cargo check --target x86_64-pc-windows-gnu
+
+      - name: Check macOS target
+        run: cargo check --target x86_64-apple-darwin
+
+      - name: Shell syntax
+        run: |
+          sh -n install.sh
+          sh -n scripts/package-macos.sh
+
+  checks-windows:
+    name: checks windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Parse install.ps1
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+
+      - name: Check Windows MSVC
+        run: cargo check
+
+  build:
+    name: build ${{ matrix.target }}
+    needs:
+      - checks
+      - checks-windows
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package version
+        id: version
+        shell: bash
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package Unix
+        if: matrix.archive == 'tar.gz' && !contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/pester" dist/pester
+          tar -C dist -czf "pester-${{ matrix.target }}.tar.gz" pester
+
+      - name: Package macOS
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          chmod +x scripts/package-macos.sh
+          scripts/package-macos.sh "${{ matrix.target }}" "target/${{ matrix.target }}/release/pester" "${{ steps.version.outputs.version }}"
+
+      - name: Package Windows
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/pester.exe" "dist/pester.exe"
+          Compress-Archive -Path "dist/pester.exe" -DestinationPath "pester-${{ matrix.target }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-${{ matrix.target }}
+          path: pester-${{ matrix.target }}.*
+
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum pester-* > checksums.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* --title "${GITHUB_REF_NAME}" --notes "Pester ${GITHUB_REF_NAME}"

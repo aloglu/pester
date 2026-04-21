@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu,x86_64-apple-darwin
+          components: rustfmt,clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Test
+        run: cargo test
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check Linux
+        run: cargo check
+
+      - name: Check Windows target
+        run: cargo check --target x86_64-pc-windows-gnu
+
+      - name: Check macOS target
+        run: cargo check --target x86_64-apple-darwin
+
+      - name: Shell syntax
+        run: |
+          sh -n install.sh
+          sh -n scripts/package-macos.sh
+
+  powershell:
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Parse install.ps1
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+
+      - name: Check Windows MSVC
+        run: cargo check
