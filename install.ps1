@@ -47,6 +47,9 @@ try {
     }
 
     & (Join-Path $InstallDir $BinName) install
+    if ($LASTEXITCODE -ne 0) {
+        throw "pester install failed with exit code $LASTEXITCODE"
+    }
 
     Write-Host "Pester installed to $(Join-Path $InstallDir $BinName)"
     Write-Host ""

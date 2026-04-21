@@ -212,7 +212,7 @@ The installer installs:
 It also creates:
 
 ```text
-Scheduled Task: Pester
+Scheduled Task: Pester, or a Startup shortcut fallback if Task Scheduler denies access
 Start Menu shortcut: Pester
 AppUserModelID: com.aloglu.pester
 ```

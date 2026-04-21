@@ -234,6 +234,7 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -245,7 +246,7 @@ mod platform {
     };
     use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
     use windows::Win32::UI::Shell::{
-        FOLDERID_StartMenu, IShellLinkW, SHGetKnownFolderPath, ShellLink,
+        FOLDERID_StartMenu, FOLDERID_Startup, IShellLinkW, SHGetKnownFolderPath, ShellLink,
     };
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -255,6 +256,73 @@ mod platform {
     pub fn install(_paths: &Paths) -> Result<()> {
         let exe = std::env::current_exe()?;
         create_start_menu_shortcut(&exe)?;
+        match install_scheduled_task(&exe) {
+            Ok(()) => println!("Installed and started Scheduled Task."),
+            Err(error) => {
+                let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
+                create_startup_shortcut(&exe)?;
+                start_daemon(&exe)?;
+                println!(
+                    "Task Scheduler setup failed ({error:#}). Installed Startup shortcut fallback."
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn uninstall(_paths: &Paths) -> Result<()> {
+        let _ = run("schtasks", &["/End", "/TN", "Pester"]);
+        let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
+        let _ = remove_start_menu_shortcut();
+        let _ = remove_startup_shortcut();
+        Ok(())
+    }
+
+    pub fn diagnostics(_paths: &Paths) -> Vec<String> {
+        let output = Command::new("schtasks")
+            .args(["/Query", "/TN", "Pester"])
+            .output();
+        let start_menu_shortcut = start_menu_shortcut_path();
+        let startup_shortcut = startup_shortcut_path();
+        let startup_installed = startup_shortcut
+            .as_ref()
+            .map(|path| path.exists())
+            .unwrap_or(false);
+        let (manager, status) = match output {
+            Ok(output) => {
+                let task_installed = output.status.success();
+                let status = match (task_installed, startup_installed) {
+                    (true, true) => "installed (Task Scheduler and Startup shortcut fallback)",
+                    (true, false) => "installed (Task Scheduler)",
+                    (false, true) => "installed (Startup shortcut fallback)",
+                    (false, false) => "not installed",
+                };
+                ("Windows Task Scheduler", status)
+            }
+            Err(_) => (
+                "unavailable (schtasks failed to run)",
+                if startup_installed {
+                    "installed (Startup shortcut fallback)"
+                } else {
+                    "unknown"
+                },
+            ),
+        };
+        vec![
+            format!("service manager: {manager}"),
+            format!("service: {status}"),
+            format!(
+                "start menu shortcut: {}",
+                shortcut_status(start_menu_shortcut.as_ref())
+            ),
+            format!(
+                "startup shortcut fallback: {}",
+                shortcut_status(startup_shortcut.as_ref())
+            ),
+        ]
+    }
+
+    fn install_scheduled_task(exe: &std::path::Path) -> Result<()> {
         let task = format!("\"{}\" daemon", exe.display());
         run(
             "schtasks",
@@ -263,62 +331,64 @@ mod platform {
             ],
         )?;
         run("schtasks", &["/Run", "/TN", "Pester"])?;
-        println!("Installed and started Scheduled Task.");
         Ok(())
     }
 
-    pub fn uninstall(_paths: &Paths) -> Result<()> {
-        let _ = run("schtasks", &["/End", "/TN", "Pester"]);
-        let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
-        let _ = remove_start_menu_shortcut();
-        Ok(())
-    }
+    fn start_daemon(exe: &std::path::Path) -> Result<()> {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-    pub fn diagnostics(_paths: &Paths) -> Vec<String> {
-        let output = Command::new("schtasks")
-            .args(["/Query", "/TN", "Pester"])
-            .output();
-        let Ok(output) = output else {
-            return vec![
-                "service manager: unavailable (schtasks failed to run)".to_string(),
-                "service: unknown".to_string(),
-            ];
-        };
-        let status = if output.status.success() {
-            "installed"
-        } else {
-            "not installed"
-        };
-        let shortcut = shortcut_path();
-        vec![
-            "service manager: Windows Task Scheduler".to_string(),
-            format!("service: {status}"),
-            format!(
-                "start menu shortcut: {}",
-                shortcut
-                    .map(|path| {
-                        if path.exists() {
-                            format!("installed ({})", path.display())
-                        } else {
-                            format!("missing ({})", path.display())
-                        }
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string())
-            ),
-        ]
+        Command::new(exe)
+            .arg("daemon")
+            .creation_flags(DETACHED_PROCESS)
+            .spawn()
+            .context("failed to start Pester daemon")?;
+        Ok(())
     }
 
     fn run(program: &str, args: &[&str]) -> Result<()> {
-        let status = Command::new(program).args(args).status()?;
-        if !status.success() {
-            anyhow::bail!("{program} failed with status {status}");
+        let output = Command::new(program).args(args).output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let detail = stderr.trim();
+            let detail = if detail.is_empty() {
+                stdout.trim()
+            } else {
+                detail
+            };
+            if detail.is_empty() {
+                anyhow::bail!("{program} failed with status {}", output.status);
+            }
+            anyhow::bail!("{program} failed with status {}: {detail}", output.status);
         }
         Ok(())
     }
 
     fn create_start_menu_shortcut(exe: &std::path::Path) -> Result<()> {
+        create_shortcut(
+            &start_menu_shortcut_path()?,
+            exe,
+            "daemon",
+            "Pester reminder daemon",
+        )
+    }
+
+    fn create_startup_shortcut(exe: &std::path::Path) -> Result<()> {
+        create_shortcut(
+            &startup_shortcut_path()?,
+            exe,
+            "daemon",
+            "Start Pester reminder daemon at login",
+        )
+    }
+
+    fn create_shortcut(
+        shortcut_path: &std::path::Path,
+        exe: &std::path::Path,
+        arguments: &str,
+        description: &str,
+    ) -> Result<()> {
         let _com = ComApartment::new()?;
-        let shortcut_path = shortcut_path()?;
         if let Some(parent) = shortcut_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -330,10 +400,10 @@ mod platform {
                 .SetPath(&HSTRING::from(exe.display().to_string()))
                 .context("could not set Pester shortcut path")?;
             shell_link
-                .SetArguments(&HSTRING::from("daemon"))
+                .SetArguments(&HSTRING::from(arguments))
                 .context("could not set Pester shortcut arguments")?;
             shell_link
-                .SetDescription(&HSTRING::from("Pester reminder daemon"))
+                .SetDescription(&HSTRING::from(description))
                 .context("could not set Pester shortcut description")?;
             shell_link
                 .SetShowCmd(SW_SHOWNORMAL)
@@ -352,27 +422,48 @@ mod platform {
                 .context("could not access Pester shortcut persistence")?;
             persist_file
                 .Save(&HSTRING::from(shortcut_path.display().to_string()), true)
-                .context("could not save Pester Start Menu shortcut")?;
+                .context("could not save Pester shortcut")?;
         }
 
         Ok(())
     }
 
     fn remove_start_menu_shortcut() -> Result<()> {
-        let shortcut_path = shortcut_path()?;
+        let shortcut_path = start_menu_shortcut_path()?;
+        remove_shortcut(&shortcut_path)
+    }
+
+    fn remove_startup_shortcut() -> Result<()> {
+        let shortcut_path = startup_shortcut_path()?;
+        remove_shortcut(&shortcut_path)
+    }
+
+    fn remove_shortcut(shortcut_path: &std::path::Path) -> Result<()> {
         if shortcut_path.exists() {
-            std::fs::remove_file(&shortcut_path)
+            std::fs::remove_file(shortcut_path)
                 .with_context(|| format!("failed to remove {}", shortcut_path.display()))?;
         }
         Ok(())
     }
 
-    fn shortcut_path() -> Result<PathBuf> {
+    fn start_menu_shortcut_path() -> Result<PathBuf> {
         let start_menu = known_folder_path(&FOLDERID_StartMenu)?;
         Ok(start_menu
             .join("Programs")
             .join(APP_NAME)
             .join(format!("{APP_NAME}.lnk")))
+    }
+
+    fn startup_shortcut_path() -> Result<PathBuf> {
+        Ok(known_folder_path(&FOLDERID_Startup)?.join(format!("{APP_NAME}.lnk")))
+    }
+
+    fn shortcut_status(path: std::result::Result<&PathBuf, &anyhow::Error>) -> String {
+        match path {
+            Ok(path) if path.exists() => format!("installed ({})", path.display()),
+            Ok(path) => format!("missing ({})", path.display()),
+            Err(_) => "unknown".to_string(),
+        }
     }
 
     fn known_folder_path(folder_id: &windows::core::GUID) -> Result<PathBuf> {
