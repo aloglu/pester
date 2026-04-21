@@ -2,6 +2,70 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "aloglu/pester"
 $BinName = "pester.exe"
+$Step = 0
+$TotalSteps = 5
+
+function Test-ColorOutput {
+    if ($env:NO_COLOR -or $env:PESTER_INSTALL_NO_COLOR) {
+        return $false
+    }
+
+    if ([Console]::IsOutputRedirected) {
+        return $false
+    }
+
+    return $true
+}
+
+$UseColor = Test-ColorOutput
+
+function Format-Text {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Text,
+        [Parameter(Mandatory = $true)]
+        [string] $Code
+    )
+
+    if (-not $UseColor) {
+        return $Text
+    }
+
+    return "$([char]27)[$Code`m$Text$([char]27)[0m"
+}
+
+function Write-Heading {
+    Write-Host (Format-Text "Pester Installer" "1")
+}
+
+function Write-Detail {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Message
+    )
+
+    Write-Host "  $(Format-Text $Message '2')"
+}
+
+function Write-Step {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Message
+    )
+
+    $script:Step += 1
+    Write-Host ""
+    Write-Host "$(Format-Text "[$script:Step/$TotalSteps]" '34') $(Format-Text $Message '1')"
+}
+
+function Write-Ok {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Message
+    )
+
+    Write-Host "  $(Format-Text 'OK' '32') $Message"
+}
 
 function Test-Windows {
     if ($env:PESTER_INSTALL_OS) {
@@ -185,10 +249,16 @@ $InstalledExe = Join-Path $InstallDir $BinName
 New-Item -ItemType Directory -Path $TempDir | Out-Null
 
 try {
-    Write-Host "Downloading $Artifact..."
+    Write-Heading
+    Write-Detail "Target: Windows $TargetArch"
+    Write-Detail "Artifact: $Artifact"
+
+    Write-Step "Downloading release files"
     Invoke-Download "$BaseUrl/$Artifact" (Join-Path $TempDir $Artifact)
     Invoke-Download "$BaseUrl/checksums.txt" (Join-Path $TempDir "checksums.txt")
+    Write-Ok "Downloaded $Artifact"
 
+    Write-Step "Verifying checksum"
     $ExpectedLine = Get-Content (Join-Path $TempDir "checksums.txt") |
         Where-Object {
             $Parts = $_ -split "\s+"
@@ -203,24 +273,36 @@ try {
     if ($Expected -ne $Actual) {
         throw "Checksum verification failed"
     }
+    Write-Ok "Checksum verified"
 
+    Write-Step "Installing binary"
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Stop-InstalledPester $InstalledExe
     Expand-Archive -Path (Join-Path $TempDir $Artifact) -DestinationPath $TempDir -Force
     Copy-InstalledBinary (Join-Path $TempDir $BinName) $InstalledExe
 
     Add-UserPathEntry $InstallDir
+    Write-Ok "Installed to $InstalledExe"
 
-    & $InstalledExe install
+    Write-Step "Starting background service"
+    $InstallOutput = & $InstalledExe install 2>&1
     if ($LASTEXITCODE -ne 0) {
+        foreach ($Line in $InstallOutput) {
+            Write-Detail ($Line.ToString())
+        }
         throw "pester install failed with exit code $LASTEXITCODE"
     }
+    foreach ($Line in $InstallOutput) {
+        Write-Detail ($Line.ToString())
+    }
+    Write-Ok "Background service installed and started"
 
-    Write-Host "Pester installed to $InstalledExe"
+    Write-Step "Finishing setup"
+    Write-Ok "Pester is ready"
     Write-Host ""
-    Write-Host "Try:"
-    Write-Host "  pester add winddown --time 22:00 --every 5m --title `"Wind down`" --message `"No exciting stuff now.`""
-    Write-Host "  pester status"
+    Write-Host (Format-Text "Next steps:" "1")
+    Write-Detail "pester add winddown --time 22:00 --every 5m --title `"Wind down`" --message `"No exciting stuff now.`""
+    Write-Detail "pester status"
 }
 finally {
     Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue

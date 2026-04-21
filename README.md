@@ -293,12 +293,6 @@ checksums.txt
 Users normally do not download these artifacts manually. The install scripts
 select the correct artifact automatically.
 
-## Signing
-
-Pester release binaries are not currently code-signed or notarized. The project
-does not require Apple Developer Program membership or a Windows code-signing
-certificate.
-
 ## License
 
 Released under the [MIT License](https://github.com/aloglu/pester/blob/main/LICENSE).
