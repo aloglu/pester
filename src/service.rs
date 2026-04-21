@@ -21,7 +21,7 @@ mod platform {
 
     use anyhow::{Context, Result};
 
-    use crate::paths::Paths;
+    use crate::{paths::Paths, term};
 
     pub fn install(_paths: &Paths) -> Result<()> {
         let exe = std::env::current_exe()?;
@@ -39,7 +39,7 @@ mod platform {
             "systemctl",
             &["--user", "enable", "--now", "pester.service"],
         )?;
-        println!("Installed and started user systemd service.");
+        term::ok("Installed and started user systemd service.");
         Ok(())
     }
 
@@ -107,7 +107,7 @@ mod platform {
 
     use anyhow::{Context, Result};
 
-    use crate::paths::Paths;
+    use crate::{paths::Paths, term};
 
     pub fn install(_paths: &Paths) -> Result<()> {
         let exe = daemon_executable()?;
@@ -141,7 +141,7 @@ mod platform {
             "launchctl",
             &["load", "-w", plist.to_str().unwrap_or_default()],
         )?;
-        println!("Installed and started LaunchAgent.");
+        term::ok("Installed and started LaunchAgent.");
         Ok(())
     }
 
@@ -251,20 +251,20 @@ mod platform {
     use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWNORMAL};
 
     use crate::app::{APP_ID, APP_NAME};
-    use crate::paths::Paths;
+    use crate::{paths::Paths, term};
 
     pub fn install(_paths: &Paths) -> Result<()> {
         let exe = std::env::current_exe()?;
         create_start_menu_shortcut(&exe)?;
         match install_scheduled_task(&exe) {
-            Ok(()) => println!("Installed and started Scheduled Task."),
+            Ok(()) => term::ok("Installed and started Scheduled Task."),
             Err(error) => {
                 let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
                 create_startup_shortcut(&exe)?;
                 start_daemon(&exe)?;
-                println!(
+                term::warn(format!(
                     "Task Scheduler setup failed ({error:#}). Installed Startup shortcut fallback."
-                );
+                ));
             }
         }
         Ok(())

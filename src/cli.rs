@@ -1,11 +1,24 @@
+use clap::builder::{
+    styling::{AnsiColor, Effects},
+    Styles,
+};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "pester")]
 #[command(about = "Reminder notifications that repeat until you mark them done.")]
+#[command(styles = cli_styles())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+}
+
+fn cli_styles() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Blue.on_default() | Effects::BOLD)
+        .usage(AnsiColor::Blue.on_default() | Effects::BOLD)
+        .literal(AnsiColor::Green.on_default())
+        .placeholder(AnsiColor::Yellow.on_default())
 }
 
 #[derive(Debug, Subcommand)]
