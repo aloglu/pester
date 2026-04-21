@@ -44,6 +44,18 @@ jobs:
           sh -n install.sh
           sh -n scripts/package-macos.sh
 
+      - name: Installer platform selection
+        run: |
+          test "$(PESTER_INSTALL_DRY_RUN=1 PESTER_INSTALL_OS=Linux PESTER_INSTALL_ARCH=x86_64 sh install.sh)" = "pester-linux-x86_64.tar.gz"
+          test "$(PESTER_INSTALL_DRY_RUN=1 PESTER_INSTALL_OS=Linux PESTER_INSTALL_ARCH=amd64 sh install.sh)" = "pester-linux-x86_64.tar.gz"
+          test "$(PESTER_INSTALL_DRY_RUN=1 PESTER_INSTALL_OS=Linux PESTER_INSTALL_ARCH=aarch64 sh install.sh)" = "pester-linux-aarch64.tar.gz"
+          test "$(PESTER_INSTALL_DRY_RUN=1 PESTER_INSTALL_OS=Darwin PESTER_INSTALL_ARCH=arm64 sh install.sh)" = "pester-macos-aarch64.tar.gz"
+          if PESTER_INSTALL_DRY_RUN=1 PESTER_INSTALL_OS=Darwin PESTER_INSTALL_ARCH=x86_64 sh install.sh >/tmp/pester-install.out 2>&1; then
+            cat /tmp/pester-install.out
+            exit 1
+          fi
+          grep "Intel macOS is not supported yet" /tmp/pester-install.out
+
   checks-windows:
     name: checks windows
     runs-on: windows-latest
@@ -57,6 +69,24 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+
+      - name: Installer platform selection
+        shell: pwsh
+        run: |
+          $env:PESTER_INSTALL_DRY_RUN = "1"
+          $env:PESTER_INSTALL_OS = "Windows"
+
+          $env:PESTER_INSTALL_ARCH = "X64"
+          $X64 = & ./install.ps1
+          if ($X64 -ne "pester-windows-x86_64.zip") {
+              throw "Expected pester-windows-x86_64.zip, got $X64"
+          }
+
+          $env:PESTER_INSTALL_ARCH = "Arm64"
+          $Arm64 = & ./install.ps1
+          if ($Arm64 -ne "pester-windows-aarch64.zip") {
+              throw "Expected pester-windows-aarch64.zip, got $Arm64"
+          }
 
       - name: Check Windows MSVC
         run: cargo check

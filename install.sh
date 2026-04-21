@@ -15,15 +15,28 @@ need() {
   fi
 }
 
-need curl
-need tar
+checksum_entry() {
+  artifact="$1"
+  checksums="$2"
 
-OS="$(uname -s)"
-ARCH="$(uname -m)"
+  while IFS= read -r line; do
+    case "$line" in
+      *"  ${artifact}")
+        printf '%s\n' "$line"
+        return 0
+        ;;
+    esac
+  done < "$checksums"
+
+  return 1
+}
+
+OS="${PESTER_INSTALL_OS:-$(uname -s)}"
+ARCH="${PESTER_INSTALL_ARCH:-$(uname -m)}"
 
 case "$OS" in
-  Linux) TARGET_OS="unknown-linux-gnu"; IS_MACOS=0 ;;
-  Darwin) TARGET_OS="apple-darwin"; IS_MACOS=1 ;;
+  Linux) IS_MACOS=0 ;;
+  Darwin) IS_MACOS=1 ;;
   *)
     say "Unsupported OS: $OS"
     exit 1
@@ -32,8 +45,11 @@ esac
 
 case "$ARCH" in
   x86_64 | amd64)
-    say "Intel macOS is not supported yet. Use an Apple Silicon Mac or a different platform."
-    exit 1
+    if [ "$IS_MACOS" -eq 1 ]; then
+      say "Intel macOS is not supported yet. Use an Apple Silicon Mac or a different platform."
+      exit 1
+    fi
+    TARGET_ARCH="x86_64"
     ;;
   arm64 | aarch64) TARGET_ARCH="aarch64" ;;
   *)
@@ -47,6 +63,16 @@ if [ "$IS_MACOS" -eq 1 ]; then
 else
   ARTIFACT="pester-linux-${TARGET_ARCH}.tar.gz"
 fi
+
+if [ "${PESTER_INSTALL_DRY_RUN:-0}" = "1" ]; then
+  say "$ARTIFACT"
+  exit 0
+fi
+
+need curl
+need tar
+need install
+
 BASE_URL="https://github.com/${REPO}/releases/latest/download"
 TMP_DIR="$(mktemp -d)"
 INSTALL_DIR="${HOME}/.local/bin"
@@ -60,10 +86,15 @@ say "Downloading ${ARTIFACT}..."
 curl -fsSL "${BASE_URL}/${ARTIFACT}" -o "${TMP_DIR}/${ARTIFACT}"
 curl -fsSL "${BASE_URL}/checksums.txt" -o "${TMP_DIR}/checksums.txt"
 
+if ! checksum_entry "$ARTIFACT" "${TMP_DIR}/checksums.txt" > "${TMP_DIR}/checksum.txt"; then
+  say "Checksum entry not found for ${ARTIFACT}."
+  exit 1
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$TMP_DIR" && grep "  ${ARTIFACT}\$" checksums.txt | sha256sum -c -)
+  (cd "$TMP_DIR" && sha256sum -c checksum.txt)
 elif command -v shasum >/dev/null 2>&1; then
-  (cd "$TMP_DIR" && grep "  ${ARTIFACT}\$" checksums.txt | shasum -a 256 -c -)
+  (cd "$TMP_DIR" && shasum -a 256 -c checksum.txt)
 else
   say "Could not verify checksum: sha256sum or shasum is required."
   exit 1
