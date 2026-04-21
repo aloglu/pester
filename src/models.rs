@@ -28,6 +28,12 @@ pub struct Reminder {
     pub message: String,
     pub time: String,
     pub repeat_every: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    #[serde(default, rename = "for", skip_serializing_if = "Option::is_none")]
+    pub active_for: Option<String>,
+    #[serde(default, rename = "max", skip_serializing_if = "Option::is_none")]
+    pub max_notifications: Option<u32>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -70,6 +76,15 @@ pub struct ReminderDayState {
     pub done: bool,
     #[serde(default)]
     pub last_notified_at: Option<String>,
+    #[serde(default)]
+    pub notification_count: u32,
+}
+
+impl ReminderDayState {
+    pub fn record_notification(&mut self, timestamp: String) {
+        self.last_notified_at = Some(timestamp);
+        self.notification_count = self.notification_count.saturating_add(1);
+    }
 }
 
 fn default_true() -> bool {
@@ -102,6 +117,9 @@ mod tests {
                 message: "No exciting stuff now.".to_string(),
                 time: "22:00".to_string(),
                 repeat_every: "5m".to_string(),
+                until: None,
+                active_for: None,
+                max_notifications: None,
                 enabled: true,
             }],
             confirmation: Default::default(),
@@ -113,6 +131,9 @@ mod tests {
         assert_eq!(decoded.reminders.len(), 1);
         assert_eq!(decoded.reminders[0].id, "winddown");
         assert_eq!(decoded.reminders[0].time, "22:00");
+        assert!(decoded.reminders[0].until.is_none());
+        assert!(decoded.reminders[0].active_for.is_none());
+        assert!(decoded.reminders[0].max_notifications.is_none());
     }
 
     #[test]
@@ -130,5 +151,31 @@ repeat_every = "5m"
         .unwrap();
 
         assert!(decoded.reminders[0].enabled);
+        assert!(decoded.reminders[0].until.is_none());
+        assert!(decoded.reminders[0].active_for.is_none());
+        assert!(decoded.reminders[0].max_notifications.is_none());
+    }
+
+    #[test]
+    fn serializes_window_fields_with_cli_names() {
+        let config = Config {
+            reminders: vec![Reminder {
+                id: "stretch".to_string(),
+                title: "Stretch".to_string(),
+                message: "Stand up.".to_string(),
+                time: "14:00".to_string(),
+                repeat_every: "10m".to_string(),
+                until: None,
+                active_for: Some("1h".to_string()),
+                max_notifications: Some(3),
+                enabled: true,
+            }],
+            confirmation: Default::default(),
+        };
+
+        let encoded = toml::to_string(&config).unwrap();
+
+        assert!(encoded.contains("for = \"1h\""));
+        assert!(encoded.contains("max = 3"));
     }
 }

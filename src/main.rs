@@ -10,12 +10,14 @@ mod store;
 mod term;
 
 use anyhow::{bail, Context, Result};
-use chrono::{Local, NaiveTime};
+use chrono::{Local, NaiveTime, Timelike};
 use clap::Parser;
 use cli::{Cli, Command, ConfirmCommand, ConfirmDoneCommand};
 use confirm::{confirm_delete, confirm_done, confirm_yes_no, read_phrase};
 use models::Reminder;
 use store::Store;
+
+const DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT: u64 = 12;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -32,14 +34,50 @@ fn main() -> Result<()> {
             every,
             title,
             message,
-        } => add_reminder(&store, id, time, every, title, message),
+            until,
+            active_for,
+            max_notifications,
+        } => add_reminder(
+            &store,
+            AddReminderInput {
+                id,
+                time,
+                every,
+                title,
+                message,
+                until,
+                active_for,
+                max_notifications,
+            },
+        ),
         Command::Set {
             id,
             time,
             every,
             title,
             message,
-        } => set_reminder(&store, id, time, every, title, message),
+            until,
+            active_for,
+            max_notifications,
+            clear_until,
+            clear_active_for,
+            clear_max_notifications,
+        } => set_reminder(
+            &store,
+            SetReminderInput {
+                id,
+                time,
+                every,
+                title,
+                message,
+                until,
+                active_for,
+                max_notifications,
+                clear_until,
+                clear_active_for,
+                clear_max_notifications,
+            },
+        ),
         Command::Done { target } => done(&store, target),
         Command::Remove { id } => remove(&store, id),
         Command::Enable { target } => set_enabled(&store, target, true),
@@ -61,17 +99,39 @@ fn main() -> Result<()> {
     }
 }
 
-fn add_reminder(
-    store: &Store,
+struct AddReminderInput {
     id: String,
     time: String,
     every: String,
     title: String,
     message: String,
-) -> Result<()> {
+    until: Option<String>,
+    active_for: Option<String>,
+    max_notifications: Option<u32>,
+}
+
+fn add_reminder(store: &Store, input: AddReminderInput) -> Result<()> {
+    let AddReminderInput {
+        id,
+        time,
+        every,
+        title,
+        message,
+        until,
+        active_for,
+        max_notifications,
+    } = input;
+
     validate_id(&id)?;
     parse_time(&time)?;
     parse_repeat_interval(&every)?;
+    validate_window_config(
+        &time,
+        &every,
+        until.as_deref(),
+        active_for.as_deref(),
+        max_notifications,
+    )?;
 
     let mut config = store.load_config()?;
     if config.reminder(&id).is_some() {
@@ -84,25 +144,61 @@ fn add_reminder(
         message,
         time,
         repeat_every: every,
+        until,
+        active_for,
+        max_notifications,
         enabled: true,
     });
     store.save_config(&config)?;
     term::ok(format!("Added reminder \"{id}\"."));
+    let reminder = config.reminder(&id).expect("reminder was just added");
+    warn_if_default_window_is_short(reminder)?;
     Ok(())
 }
 
-fn set_reminder(
-    store: &Store,
+struct SetReminderInput {
     id: String,
     time: Option<String>,
     every: Option<String>,
     title: Option<String>,
     message: Option<String>,
-) -> Result<()> {
+    until: Option<String>,
+    active_for: Option<String>,
+    max_notifications: Option<u32>,
+    clear_until: bool,
+    clear_active_for: bool,
+    clear_max_notifications: bool,
+}
+
+fn set_reminder(store: &Store, input: SetReminderInput) -> Result<()> {
+    let SetReminderInput {
+        id,
+        time,
+        every,
+        title,
+        message,
+        until,
+        active_for,
+        max_notifications,
+        clear_until,
+        clear_active_for,
+        clear_max_notifications,
+    } = input;
+
     let mut config = store.load_config()?;
     let reminder = config
         .reminder_mut(&id)
         .with_context(|| format!("reminder \"{id}\" does not exist"))?;
+
+    if until.is_some() && clear_until {
+        bail!("cannot use --until and --clear-until together");
+    }
+    if active_for.is_some() && clear_active_for {
+        bail!("cannot use --for and --clear-for together");
+    }
+    if max_notifications.is_some() && clear_max_notifications {
+        bail!("cannot use --max and --clear-max together");
+    }
 
     let mut changes = Vec::new();
     if let Some(time) = time {
@@ -123,16 +219,80 @@ fn set_reminder(
         changes.push("message updated".to_string());
         reminder.message = message;
     }
+    if let Some(until) = until {
+        parse_time(&until).context("--until must be in 24-hour HH:MM format")?;
+        changes.push(format!(
+            "until: {} -> {}",
+            reminder.until.as_deref().unwrap_or("default"),
+            until
+        ));
+        reminder.until = Some(until);
+    }
+    if clear_until {
+        changes.push(format!(
+            "until: {} -> default",
+            reminder.until.as_deref().unwrap_or("default")
+        ));
+        reminder.until = None;
+    }
+    if let Some(active_for) = active_for {
+        parse_window_duration(&active_for)?;
+        changes.push(format!(
+            "for: {} -> {}",
+            reminder.active_for.as_deref().unwrap_or("default"),
+            active_for
+        ));
+        reminder.active_for = Some(active_for);
+    }
+    if clear_active_for {
+        changes.push(format!(
+            "for: {} -> default",
+            reminder.active_for.as_deref().unwrap_or("default")
+        ));
+        reminder.active_for = None;
+    }
+    if let Some(max_notifications) = max_notifications {
+        validate_max_notifications(max_notifications)?;
+        changes.push(format!(
+            "max: {} -> {}",
+            reminder
+                .max_notifications
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_string()),
+            max_notifications
+        ));
+        reminder.max_notifications = Some(max_notifications);
+    }
+    if clear_max_notifications {
+        changes.push(format!(
+            "max: {} -> default",
+            reminder
+                .max_notifications
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        ));
+        reminder.max_notifications = None;
+    }
+
+    validate_window_config(
+        &reminder.time,
+        &reminder.repeat_every,
+        reminder.until.as_deref(),
+        reminder.active_for.as_deref(),
+        reminder.max_notifications,
+    )?;
 
     if changes.is_empty() {
         bail!("nothing to update");
     }
 
+    let updated_reminder = reminder.clone();
     store.save_config(&config)?;
     term::ok(format!("Updated reminder \"{id}\"."));
     for change in changes {
         term::detail(change);
     }
+    warn_if_default_window_is_short(&updated_reminder)?;
     Ok(())
 }
 
@@ -148,9 +308,9 @@ fn done(store: &Store, target: String) -> Result<()> {
             "Mark all reminders done for today? This will stop every reminder until tomorrow.",
         )?;
         let mut state = store.load_state()?;
-        let today = Local::now().date_naive();
+        let now = Local::now();
         for reminder in &config.reminders {
-            state.mark_done(today, &reminder.id);
+            state.mark_done(daemon::state_date_for_now(reminder, now)?, &reminder.id);
         }
         store.save_state(&state)?;
         term::ok("Marked all reminders done for today.");
@@ -166,7 +326,10 @@ fn done(store: &Store, target: String) -> Result<()> {
     )?;
 
     let mut state = store.load_state()?;
-    state.mark_done(Local::now().date_naive(), &reminder.id);
+    state.mark_done(
+        daemon::state_date_for_now(reminder, Local::now())?,
+        &reminder.id,
+    );
     store.save_state(&state)?;
     term::ok(format!("Marked \"{}\" done for today.", reminder.id));
     Ok(())
@@ -248,6 +411,7 @@ fn list(store: &Store) -> Result<()> {
         term::key_value("title", &reminder.title);
         term::key_value("time", &reminder.time);
         term::key_value("repeat", &reminder.repeat_every);
+        term::key_value("window", reminder_window_description(reminder));
         term::key_value("state", state);
     }
     Ok(())
@@ -256,7 +420,8 @@ fn list(store: &Store) -> Result<()> {
 fn status(store: &Store) -> Result<()> {
     let config = store.load_config()?;
     let state = store.load_state()?;
-    let today = Local::now().date_naive();
+    let now = Local::now();
+    let today = now.date_naive();
 
     term::heading("Pester Status");
     term::key_value("config", store.paths.config_file.display());
@@ -272,7 +437,8 @@ fn status(store: &Store) -> Result<()> {
     println!();
     term::heading("Reminders");
     for reminder in &config.reminders {
-        let today_state = state.get(today, &reminder.id);
+        let state_date = daemon::state_date_for_now(reminder, now)?;
+        let today_state = state.get(state_date, &reminder.id);
         let done = today_state.map(|entry| entry.done).unwrap_or(false);
         let status = if !reminder.enabled {
             "disabled"
@@ -291,6 +457,13 @@ fn status(store: &Store) -> Result<()> {
         term::key_value("status", status);
         term::key_value("time", &reminder.time);
         term::key_value("repeat", &reminder.repeat_every);
+        term::key_value("window", reminder_window_description(reminder));
+        if let Some(max_notifications) = reminder.max_notifications {
+            let count = today_state
+                .map(|entry| entry.notification_count)
+                .unwrap_or_default();
+            term::key_value("notifications", format!("{count}/{max_notifications}"));
+        }
     }
     Ok(())
 }
@@ -434,9 +607,104 @@ pub(crate) fn parse_repeat_interval(every: &str) -> Result<std::time::Duration> 
     Ok(duration)
 }
 
+pub(crate) fn parse_window_duration(value: &str) -> Result<std::time::Duration> {
+    let duration =
+        humantime::parse_duration(value).context("--for must look like 30m, 2h, or 3h10m")?;
+    if duration.is_zero() {
+        bail!("--for must be greater than zero");
+    }
+    if duration >= std::time::Duration::from_secs(24 * 60 * 60) {
+        bail!("--for must be shorter than 24h to avoid overlapping daily windows");
+    }
+    Ok(duration)
+}
+
+fn validate_max_notifications(max_notifications: u32) -> Result<()> {
+    if max_notifications == 0 {
+        bail!("--max must be greater than zero");
+    }
+    Ok(())
+}
+
+fn validate_window_config(
+    time: &str,
+    every: &str,
+    until: Option<&str>,
+    active_for: Option<&str>,
+    max_notifications: Option<u32>,
+) -> Result<()> {
+    parse_time(time)?;
+    parse_repeat_interval(every)?;
+    if until.is_some() && active_for.is_some() {
+        bail!("use --until or --for, not both");
+    }
+    if let Some(until) = until {
+        parse_time(until).context("--until must be in 24-hour HH:MM format")?;
+    }
+    if let Some(active_for) = active_for {
+        parse_window_duration(active_for)?;
+    }
+    if let Some(max_notifications) = max_notifications {
+        validate_max_notifications(max_notifications)?;
+    }
+    Ok(())
+}
+
+fn reminder_window_description(reminder: &Reminder) -> String {
+    let mut parts = Vec::new();
+    if let Some(until) = &reminder.until {
+        parts.push(format!("until {until}"));
+    } else if let Some(active_for) = &reminder.active_for {
+        parts.push(format!("for {active_for}"));
+    } else {
+        parts.push("until midnight".to_string());
+    }
+    if let Some(max_notifications) = reminder.max_notifications {
+        parts.push(format!("max {max_notifications} notifications"));
+    }
+    parts.join(", ")
+}
+
+fn warn_if_default_window_is_short(reminder: &Reminder) -> Result<()> {
+    if reminder.until.is_some()
+        || reminder.active_for.is_some()
+        || reminder.max_notifications.is_some()
+    {
+        return Ok(());
+    }
+    let opportunities = default_notification_opportunities(&reminder.time, &reminder.repeat_every)?;
+    if default_window_needs_warning(&reminder.time, &reminder.repeat_every)? {
+        term::warn(format!(
+            "Default behavior will notify at most {opportunities} time(s) before midnight."
+        ));
+        term::detail("Use --until HH:MM, --for 2h, or --max N to make the window explicit.");
+        term::detail(format!("Example: pester set {} --until 03:00", reminder.id));
+    }
+    Ok(())
+}
+
+fn default_notification_opportunities(time: &str, every: &str) -> Result<u64> {
+    let scheduled = parse_time(time)?;
+    let repeat = parse_repeat_interval(every)?;
+    let seconds_since_midnight = u64::from(scheduled.num_seconds_from_midnight());
+    let seconds_until_midnight = 24 * 60 * 60 - seconds_since_midnight;
+    if seconds_until_midnight == 0 {
+        return Ok(0);
+    }
+    Ok(((seconds_until_midnight - 1) / repeat.as_secs()) + 1)
+}
+
+fn default_window_needs_warning(time: &str, every: &str) -> Result<bool> {
+    Ok(default_notification_opportunities(time, every)?
+        <= DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_repeat_interval, parse_time, validate_id};
+    use super::{
+        default_notification_opportunities, default_window_needs_warning, parse_repeat_interval,
+        parse_time, parse_window_duration, validate_id, validate_window_config,
+    };
 
     #[test]
     fn validates_reminder_ids() {
@@ -469,5 +737,51 @@ mod tests {
         );
         assert!(parse_repeat_interval("0s").is_err());
         assert!(parse_repeat_interval("soon").is_err());
+    }
+
+    #[test]
+    fn validates_window_durations() {
+        assert_eq!(
+            parse_window_duration("3h10m").unwrap(),
+            std::time::Duration::from_secs(11_400)
+        );
+        assert!(parse_window_duration("0s").is_err());
+        assert!(parse_window_duration("24h").is_err());
+        assert!(parse_window_duration("soon").is_err());
+    }
+
+    #[test]
+    fn rejects_conflicting_window_limits() {
+        assert!(validate_window_config("23:50", "5m", Some("03:00"), None, Some(3)).is_ok());
+        assert!(validate_window_config("23:50", "5m", None, Some("3h"), Some(3)).is_ok());
+        assert!(validate_window_config("23:50", "5m", Some("03:00"), Some("3h"), None).is_err());
+        assert!(validate_window_config("23:50", "5m", None, None, Some(0)).is_err());
+    }
+
+    #[test]
+    fn counts_default_notification_opportunities_before_midnight() {
+        assert_eq!(
+            default_notification_opportunities("23:00", "5m").unwrap(),
+            12
+        );
+        assert_eq!(
+            default_notification_opportunities("23:50", "5m").unwrap(),
+            2
+        );
+        assert_eq!(
+            default_notification_opportunities("23:55", "5m").unwrap(),
+            1
+        );
+        assert_eq!(
+            default_notification_opportunities("00:00", "5m").unwrap(),
+            288
+        );
+    }
+
+    #[test]
+    fn warns_when_default_window_allows_twelve_or_fewer_notifications() {
+        assert!(default_window_needs_warning("23:00", "5m").unwrap());
+        assert!(default_window_needs_warning("23:50", "5m").unwrap());
+        assert!(!default_window_needs_warning("22:55", "5m").unwrap());
     }
 }

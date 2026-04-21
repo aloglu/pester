@@ -40,6 +40,15 @@ Add a bedtime wind-down reminder:
 pester add winddown --time 22:00 --every 5m --title "Wind down" --message "No exciting stuff now."
 ```
 
+By default, reminders repeat from their scheduled time until local midnight.
+For reminders late in the day, make the reminder window explicit:
+
+```sh
+pester add winddown --time 23:50 --every 5m --until 03:00 --title "Wind down" --message "No exciting stuff now."
+pester add stretch --time 14:00 --every 10m --for 1h --title "Stretch" --message "Stand up and stretch."
+pester add meds --time 09:00 --every 5m --max 3 --title "Medication" --message "Take morning medication."
+```
+
 Add medication reminders:
 
 ```sh
@@ -64,6 +73,8 @@ Change a reminder:
 ```sh
 pester set winddown --time 23:00
 pester set winddown --every 10m
+pester set winddown --until 03:00
+pester set winddown --clear-until
 pester set winddown --message "Start winding down."
 ```
 
@@ -132,8 +143,8 @@ Resetting the phrase requires confirmation.
 ## Commands
 
 ```text
-pester add <id> --time HH:MM --every 5m --title <title> --message <message>
-pester set <id> [--time HH:MM] [--every 10m] [--title <title>] [--message <message>]
+pester add <id> --time HH:MM --every 5m --title <title> --message <message> [--until HH:MM] [--for 2h] [--max 3]
+pester set <id> [--time HH:MM] [--every 10m] [--until HH:MM] [--for 2h] [--max 3] [--clear-until] [--clear-for] [--clear-max] [--title <title>] [--message <message>]
 pester done <id>
 pester done all
 pester enable <id>
@@ -155,9 +166,16 @@ Reminder ids may contain ASCII letters, numbers, hyphens, and underscores.
 Reserved command words such as `all`, `done`, `enable`, and `disable` cannot be
 used as reminder ids.
 
-Times are local 24-hour wall-clock times in `HH:MM` format. A reminder marked
-done is done only for the current local day. The next day, it becomes pending
-again.
+Times are local 24-hour wall-clock times in `HH:MM` format. By default, a
+reminder can notify from its scheduled time until local midnight. `--until`
+sets an explicit end time; if the end time is earlier than the scheduled time,
+the reminder window continues past midnight into the next day. `--for` sets a
+duration shorter than 24 hours. `--max` limits the number of notifications in
+one reminder window and can be combined with `--until` or `--for`.
+
+A reminder marked done is done only for the current reminder window. For a
+window that crosses midnight, such as `--time 23:50 --until 03:00`, marking it
+done after midnight stops the reminder until the next 23:50 window.
 
 ## Platform Behavior
 

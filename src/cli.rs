@@ -34,6 +34,20 @@ pub enum Command {
         title: String,
         #[arg(long)]
         message: String,
+        #[arg(long, value_name = "HH:MM", help = "Repeat until this local time")]
+        until: Option<String>,
+        #[arg(
+            long = "for",
+            value_name = "DURATION",
+            help = "Repeat for this long after the scheduled time"
+        )]
+        active_for: Option<String>,
+        #[arg(
+            long = "max",
+            value_name = "COUNT",
+            help = "Limit notifications per reminder window"
+        )]
+        max_notifications: Option<u32>,
     },
     /// Change an existing reminder.
     Set {
@@ -46,6 +60,26 @@ pub enum Command {
         title: Option<String>,
         #[arg(long)]
         message: Option<String>,
+        #[arg(long, value_name = "HH:MM", help = "Repeat until this local time")]
+        until: Option<String>,
+        #[arg(
+            long = "for",
+            value_name = "DURATION",
+            help = "Repeat for this long after the scheduled time"
+        )]
+        active_for: Option<String>,
+        #[arg(
+            long = "max",
+            value_name = "COUNT",
+            help = "Limit notifications per reminder window"
+        )]
+        max_notifications: Option<u32>,
+        #[arg(long, help = "Reset the explicit until time")]
+        clear_until: bool,
+        #[arg(long = "clear-for", help = "Reset the explicit duration window")]
+        clear_active_for: bool,
+        #[arg(long = "clear-max", help = "Reset the notification count limit")]
+        clear_max_notifications: bool,
     },
     /// Mark a reminder done for today.
     Done { target: String },

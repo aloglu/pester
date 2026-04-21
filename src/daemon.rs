@@ -2,12 +2,12 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local, NaiveTime};
+use chrono::{DateTime, Days, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::models::{Config, Reminder, State};
 use crate::notify;
-use crate::parse_repeat_interval;
 use crate::store::Store;
+use crate::{parse_repeat_interval, parse_window_duration};
 
 pub fn run(store: Store) -> Result<()> {
     println!("Pester daemon started.");
@@ -45,9 +45,11 @@ where
             .with_context(|| format!("reminder \"{reminder_id}\" disappeared during tick"))?;
         notify(reminder)
             .with_context(|| format!("failed to send notification for {}", reminder.id))?;
+        let window = active_window(reminder, now)?
+            .with_context(|| format!("reminder \"{}\" is no longer active", reminder.id))?;
         state
-            .entry_mut(now.date_naive(), &reminder.id)
-            .last_notified_at = Some(now.to_rfc3339());
+            .entry_mut(window.state_date, &reminder.id)
+            .record_notification(now.to_rfc3339());
         save_state(state)?;
     }
 
@@ -59,17 +61,24 @@ pub(crate) fn due_reminders(
     state: &State,
     now: DateTime<Local>,
 ) -> Result<Vec<String>> {
-    let today = now.date_naive();
     let mut due = Vec::new();
 
     for reminder in config.reminders.iter().filter(|reminder| reminder.enabled) {
-        if !is_due(reminder, now)? {
+        let Some(window) = active_window(reminder, now)? else {
             continue;
-        }
+        };
 
-        let today_state = state.get(today, &reminder.id);
+        let today_state = state.get(window.state_date, &reminder.id);
         if today_state.map(|entry| entry.done).unwrap_or(false) {
             continue;
+        }
+        if let Some(max_notifications) = reminder.max_notifications {
+            if today_state
+                .map(|entry| entry.notification_count >= max_notifications)
+                .unwrap_or(false)
+            {
+                continue;
+            }
         }
 
         let last_notified_at = today_state.and_then(|entry| entry.last_notified_at.as_deref());
@@ -81,10 +90,74 @@ pub(crate) fn due_reminders(
     Ok(due)
 }
 
+pub(crate) fn state_date_for_now(reminder: &Reminder, now: DateTime<Local>) -> Result<NaiveDate> {
+    Ok(active_window(reminder, now)?
+        .map(|window| window.state_date)
+        .unwrap_or_else(|| now.date_naive()))
+}
+
+#[cfg(test)]
 fn is_due(reminder: &Reminder, now: DateTime<Local>) -> Result<bool> {
     let scheduled = NaiveTime::parse_from_str(&reminder.time, "%H:%M")
         .with_context(|| format!("invalid time for reminder {}", reminder.id))?;
     Ok(now.time() >= scheduled)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReminderWindow {
+    state_date: NaiveDate,
+    starts_at: NaiveDateTime,
+    ends_at: NaiveDateTime,
+}
+
+fn active_window(reminder: &Reminder, now: DateTime<Local>) -> Result<Option<ReminderWindow>> {
+    let today = now.date_naive();
+    let yesterday = today
+        .checked_sub_days(Days::new(1))
+        .context("could not calculate yesterday")?;
+
+    for date in [today, yesterday] {
+        let window = reminder_window_for_date(reminder, date)?;
+        let now = now.naive_local();
+        if now >= window.starts_at && now < window.ends_at {
+            return Ok(Some(window));
+        }
+    }
+
+    Ok(None)
+}
+
+fn reminder_window_for_date(reminder: &Reminder, date: NaiveDate) -> Result<ReminderWindow> {
+    let scheduled = NaiveTime::parse_from_str(&reminder.time, "%H:%M")
+        .with_context(|| format!("invalid time for reminder {}", reminder.id))?;
+    let starts_at = date.and_time(scheduled);
+    let ends_at = if let Some(active_for) = &reminder.active_for {
+        let duration = chrono::Duration::from_std(parse_window_duration(active_for)?)
+            .context("window duration is too large")?;
+        starts_at
+            .checked_add_signed(duration)
+            .context("window end is out of range")?
+    } else if let Some(until) = &reminder.until {
+        let until = NaiveTime::parse_from_str(until, "%H:%M")
+            .with_context(|| format!("invalid until time for reminder {}", reminder.id))?;
+        let end_date = if until > scheduled {
+            date
+        } else {
+            date.checked_add_days(Days::new(1))
+                .context("could not calculate next day")?
+        };
+        end_date.and_time(until)
+    } else {
+        date.checked_add_days(Days::new(1))
+            .context("could not calculate next day")?
+            .and_time(NaiveTime::MIN)
+    };
+
+    Ok(ReminderWindow {
+        state_date: date,
+        starts_at,
+        ends_at,
+    })
 }
 
 fn should_notify(
@@ -123,6 +196,7 @@ mod tests {
 
     use super::{
         deliver_due_reminders, due_reminders, duration_until_next_second, is_due, should_notify,
+        state_date_for_now,
     };
     use crate::models::{Config, Reminder, State};
 
@@ -133,6 +207,9 @@ mod tests {
             message: "No exciting stuff now.".to_string(),
             time: time.to_string(),
             repeat_every: repeat_every.to_string(),
+            until: None,
+            active_for: None,
+            max_notifications: None,
             enabled: true,
         }
     }
@@ -144,6 +221,9 @@ mod tests {
             message: "Test".to_string(),
             time: time.to_string(),
             repeat_every: repeat_every.to_string(),
+            until: None,
+            active_for: None,
+            max_notifications: None,
             enabled: true,
         }
     }
@@ -256,6 +336,75 @@ mod tests {
     }
 
     #[test]
+    fn default_window_stops_at_midnight() {
+        let now = Local.with_ymd_and_hms(2026, 4, 22, 0, 0, 0).unwrap();
+        let config = config(vec![reminder_with_id("winddown", "23:50", "5m")]);
+        let state = State::default();
+
+        assert!(due_reminders(&config, &state, now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn until_window_can_cross_midnight() {
+        let now = Local.with_ymd_and_hms(2026, 4, 22, 0, 0, 0).unwrap();
+        let mut reminder = reminder_with_id("winddown", "23:50", "5m");
+        reminder.until = Some("03:00".to_string());
+        let config = config(vec![reminder]);
+        let state = State::default();
+
+        assert_eq!(
+            due_reminders(&config, &state, now).unwrap(),
+            vec!["winddown"]
+        );
+        assert_eq!(
+            state_date_for_now(&config.reminders[0], now).unwrap(),
+            Local
+                .with_ymd_and_hms(2026, 4, 21, 23, 50, 0)
+                .unwrap()
+                .date_naive()
+        );
+    }
+
+    #[test]
+    fn until_window_stops_at_until_time() {
+        let now = Local.with_ymd_and_hms(2026, 4, 22, 3, 0, 0).unwrap();
+        let mut reminder = reminder_with_id("winddown", "23:50", "5m");
+        reminder.until = Some("03:00".to_string());
+        let config = config(vec![reminder]);
+        let state = State::default();
+
+        assert!(due_reminders(&config, &state, now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn for_window_can_cross_midnight() {
+        let now = Local.with_ymd_and_hms(2026, 4, 22, 1, 0, 0).unwrap();
+        let mut reminder = reminder_with_id("winddown", "23:50", "5m");
+        reminder.active_for = Some("3h10m".to_string());
+        let config = config(vec![reminder]);
+        let state = State::default();
+
+        assert_eq!(
+            due_reminders(&config, &state, now).unwrap(),
+            vec!["winddown"]
+        );
+    }
+
+    #[test]
+    fn max_notifications_limits_active_window() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 10, 0).unwrap();
+        let mut reminder = reminder_with_id("winddown", "22:00", "5m");
+        reminder.max_notifications = Some(2);
+        let config = config(vec![reminder]);
+        let mut state = State::default();
+        state
+            .entry_mut(now.date_naive(), "winddown")
+            .notification_count = 2;
+
+        assert!(due_reminders(&config, &state, now).unwrap().is_empty());
+    }
+
+    #[test]
     fn due_reminders_respects_repeat_interval_per_reminder() {
         let now = Local.with_ymd_and_hms(2026, 4, 21, 22, 4, 59).unwrap();
         let config = config(vec![reminder_with_id("winddown", "22:00", "5m")]);
@@ -323,6 +472,12 @@ mod tests {
             .get(now.date_naive(), "meds")
             .and_then(|entry| entry.last_notified_at.as_deref())
             .is_some());
+        assert_eq!(
+            saved[0]
+                .get(now.date_naive(), "meds")
+                .map(|entry| entry.notification_count),
+            Some(1)
+        );
         assert!(saved[0].get(now.date_naive(), "winddown").is_none());
     }
 
