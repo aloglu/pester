@@ -186,6 +186,8 @@ notification daemon such as `dunst` or `mako`.
 
 Pester uses the UserNotifications framework.
 
+Pester currently ships for Apple Silicon macOS only.
+
 The installer installs:
 
 ```text
@@ -280,12 +282,11 @@ pester uninstall --delete-data
 GitHub Releases provide prebuilt artifacts for:
 
 ```text
-pester-x86_64-unknown-linux-gnu.tar.gz
-pester-aarch64-unknown-linux-gnu.tar.gz
-pester-x86_64-apple-darwin.tar.gz
-pester-aarch64-apple-darwin.tar.gz
-pester-x86_64-pc-windows-msvc.zip
-pester-aarch64-pc-windows-msvc.zip
+pester-linux-x86_64.tar.gz
+pester-linux-aarch64.tar.gz
+pester-macos-aarch64.tar.gz
+pester-windows-x86_64.zip
+pester-windows-aarch64.zip
 checksums.txt
 ```
 

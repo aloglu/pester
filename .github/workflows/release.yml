@@ -18,7 +18,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu,x86_64-apple-darwin
+          targets: x86_64-pc-windows-gnu,aarch64-apple-darwin
           components: rustfmt,clippy
 
       - name: Format
@@ -37,7 +37,7 @@ jobs:
         run: cargo check --target x86_64-pc-windows-gnu
 
       - name: Check macOS target
-        run: cargo check --target x86_64-apple-darwin
+        run: cargo check --target aarch64-apple-darwin
 
       - name: Shell syntax
         run: |
@@ -74,21 +74,23 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+            artifact: pester-linux-x86_64.tar.gz
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
-            archive: tar.gz
+            artifact: pester-linux-aarch64.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            artifact: pester-macos-aarch64.tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            artifact: pester-windows-x86_64.zip
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             archive: zip
+            artifact: pester-windows-aarch64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +115,7 @@ jobs:
         run: |
           mkdir dist
           cp "target/${{ matrix.target }}/release/pester" dist/pester
-          tar -C dist -czf "pester-${{ matrix.target }}.tar.gz" pester
+          tar -C dist -czf "${{ matrix.artifact }}" pester
 
       - name: Package macOS
         if: contains(matrix.target, 'apple-darwin')
@@ -128,13 +130,13 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/pester.exe" "dist/pester.exe"
-          Compress-Archive -Path "dist/pester.exe" -DestinationPath "pester-${{ matrix.target }}.zip"
+          Compress-Archive -Path "dist/pester.exe" -DestinationPath "${{ matrix.artifact }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pester-${{ matrix.target }}
-          path: pester-${{ matrix.target }}.*
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
   publish:
     name: publish

@@ -14,8 +14,7 @@ switch ($Arch) {
     default { throw "Unsupported architecture: $Arch" }
 }
 
-$Target = "$TargetArch-pc-windows-msvc"
-$Artifact = "pester-$Target.zip"
+$Artifact = "pester-windows-$TargetArch.zip"
 $BaseUrl = "https://github.com/$Repo/releases/latest/download"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Pester"

@@ -9,6 +9,13 @@ fi
 TARGET="$1"
 BINARY="$2"
 VERSION="$3"
+case "$TARGET" in
+  aarch64-apple-darwin) ARTIFACT="pester-macos-aarch64.tar.gz" ;;
+  *)
+    echo "unsupported macOS target: $TARGET" >&2
+    exit 1
+    ;;
+esac
 DIST_DIR="dist"
 APP_DIR="${DIST_DIR}/Pester.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
@@ -50,4 +57,4 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-tar -C "$DIST_DIR" -czf "pester-${TARGET}.tar.gz" pester Pester.app
+tar -C "$DIST_DIR" -czf "$ARTIFACT" pester Pester.app

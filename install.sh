@@ -31,7 +31,10 @@ case "$OS" in
 esac
 
 case "$ARCH" in
-  x86_64 | amd64) TARGET_ARCH="x86_64" ;;
+  x86_64 | amd64)
+    say "Intel macOS is not supported yet. Use an Apple Silicon Mac or a different platform."
+    exit 1
+    ;;
   arm64 | aarch64) TARGET_ARCH="aarch64" ;;
   *)
     say "Unsupported architecture: $ARCH"
@@ -39,8 +42,11 @@ case "$ARCH" in
     ;;
 esac
 
-TARGET="${TARGET_ARCH}-${TARGET_OS}"
-ARTIFACT="pester-${TARGET}.tar.gz"
+if [ "$IS_MACOS" -eq 1 ]; then
+  ARTIFACT="pester-macos-${TARGET_ARCH}.tar.gz"
+else
+  ARTIFACT="pester-linux-${TARGET_ARCH}.tar.gz"
+fi
 BASE_URL="https://github.com/${REPO}/releases/latest/download"
 TMP_DIR="$(mktemp -d)"
 INSTALL_DIR="${HOME}/.local/bin"
