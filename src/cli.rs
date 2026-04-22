@@ -111,7 +111,7 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfirmCommand,
     },
-    /// Manage Pester system integration.
+    /// Manage pester system integration.
     System {
         #[command(subcommand)]
         command: SystemCommand,
@@ -142,7 +142,7 @@ pub enum SystemCommand {
     Status(SystemStatusArgs),
     /// Install and start the background service.
     Install,
-    /// Uninstall Pester.
+    /// Uninstall pester.
     Uninstall(UninstallArgs),
     /// Run the daemon in the foreground.
     Daemon,

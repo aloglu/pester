@@ -639,9 +639,9 @@ fn reset_done_phrase(store: &Store, id: Option<String>) -> Result<()> {
 
 fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
     if delete_data {
-        confirm_delete("Uninstall Pester and permanently delete all reminders and state?")?;
+        confirm_delete("Uninstall pester and permanently delete all reminders and state?")?;
     } else if !confirm_yes_no(
-        "Uninstall Pester and stop background reminders? Your reminders will be kept.",
+        "Uninstall pester and stop background reminders? Your reminders will be kept.",
     )? {
         term::warn("Cancelled.");
         return Ok(());
@@ -655,12 +655,12 @@ fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
         Some(path) => term::ok(format!("Removed binary at {}.", path.display())),
         None => term::warn("No installed binary was removed from the current development path."),
     }
-    term::ok("Uninstalled Pester.");
+    term::ok("Uninstalled pester.");
     Ok(())
 }
 
 fn system_status(store: &Store, verbose: bool) -> Result<()> {
-    term::heading("Pester System");
+    term::heading("pester system");
     for line in service::diagnostics(&store.paths) {
         term::detail(line);
     }

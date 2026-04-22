@@ -37,7 +37,7 @@ else
 fi
 
 heading() {
-  say "${BOLD}Pester Installer${RESET}"
+  say "${BOLD}pester installer${RESET}"
 }
 
 detail() {
@@ -176,10 +176,10 @@ ok "Installed to ${INSTALL_DIR}/${BIN_NAME}"
 if [ "$IS_MACOS" -eq 1 ]; then
   APP_INSTALL_DIR="${HOME}/Applications"
   mkdir -p "$APP_INSTALL_DIR"
-  rm -rf "${APP_INSTALL_DIR}/Pester.app"
-  cp -R "${TMP_DIR}/Pester.app" "${APP_INSTALL_DIR}/Pester.app"
-  chmod 0755 "${APP_INSTALL_DIR}/Pester.app/Contents/MacOS/pester"
-  ok "Installed app bundle to ${HOME}/Applications/Pester.app"
+  rm -rf "${APP_INSTALL_DIR}/pester.app"
+  cp -R "${TMP_DIR}/pester.app" "${APP_INSTALL_DIR}/pester.app"
+  chmod 0755 "${APP_INSTALL_DIR}/pester.app/Contents/MacOS/pester"
+  ok "Installed app bundle to ${HOME}/Applications/pester.app"
 fi
 
 step "Starting background service"
@@ -197,7 +197,7 @@ ok "Background service installed and started"
 
 step "Finishing setup"
 case ":$PATH:" in
-  *":${INSTALL_DIR}:"*) ok "Pester is ready" ;;
+  *":${INSTALL_DIR}:"*) ok "pester is ready" ;;
   *)
     warn "${INSTALL_DIR} is not currently in PATH."
     detail "Add this to your shell profile:"

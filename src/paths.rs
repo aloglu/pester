@@ -13,7 +13,7 @@ pub struct Paths {
 
 impl Paths {
     pub fn new() -> Result<Self> {
-        let project = ProjectDirs::from("", "aloglu", "Pester")
+        let project = ProjectDirs::from("", "aloglu", "pester")
             .context("could not determine platform config directories")?;
 
         let config_dir = project.config_dir().to_path_buf();

@@ -35,7 +35,7 @@ function Format-Text {
 }
 
 function Write-Heading {
-    Write-Host (Format-Text "Pester Installer" "1")
+    Write-Host (Format-Text "pester installer" "1")
 }
 
 function Write-Detail {
@@ -173,8 +173,8 @@ function Stop-InstalledPester {
         return
     }
 
-    & schtasks /End /TN Pester 2>$null | Out-Null
-    & schtasks /Delete /TN Pester /F 2>$null | Out-Null
+    & schtasks /End /TN pester 2>$null | Out-Null
+    & schtasks /Delete /TN pester /F 2>$null | Out-Null
 
     $ExecutablePath = [System.IO.Path]::GetFullPath($Executable)
     try {
@@ -191,7 +191,7 @@ function Stop-InstalledPester {
                 Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
     } catch {
-        Write-Warning "Could not stop existing Pester processes: $_"
+        Write-Warning "Could not stop existing pester processes: $_"
     }
 
     Start-Sleep -Milliseconds 500
@@ -243,7 +243,7 @@ if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
 
 $BaseUrl = "https://github.com/$Repo/releases/latest/download"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
-$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\Pester"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\pester"
 $InstalledExe = Join-Path $InstallDir $BinName
 
 New-Item -ItemType Directory -Path $TempDir | Out-Null
@@ -298,7 +298,7 @@ try {
     Write-Ok "Background service installed and started"
 
     Write-Step "Finishing setup"
-    Write-Ok "Pester is ready"
+    Write-Ok "pester is ready"
     Write-Host ""
     Write-Host (Format-Text "Next steps:" "1")
     Write-Detail "pester add winddown --time 22:00 --every 5m --title `"Wind down`" --message `"No exciting stuff now.`""

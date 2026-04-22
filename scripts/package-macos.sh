@@ -17,7 +17,7 @@ case "$TARGET" in
     ;;
 esac
 DIST_DIR="dist"
-APP_DIR="${DIST_DIR}/Pester.app"
+APP_DIR="${DIST_DIR}/pester.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 
@@ -42,7 +42,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Pester</string>
+  <string>pester</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -57,4 +57,4 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-tar -C "$DIST_DIR" -czf "$ARTIFACT" pester Pester.app
+tar -C "$DIST_DIR" -czf "$ARTIFACT" pester pester.app

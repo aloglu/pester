@@ -1,8 +1,10 @@
-# Pester
+# pester
 
-Pester is a cross-platform reminder daemon. It sends native desktop
-notifications at configured daily times and keeps sending them at a repeat
-interval until you explicitly mark the reminder done for the current day.
+pester is a cross-platform reminder daemon that keeps reminding you until you mark things done.
+
+It sends native desktop notifications at configured daily times and keeps
+sending them at a repeat interval until you explicitly mark the reminder done
+for the current day.
 
 It is designed for reminders that should not be easy to ignore:
 
@@ -26,10 +28,10 @@ irm https://raw.githubusercontent.com/aloglu/pester/main/install.ps1 | iex
 ```
 
 The installer detects the operating system and CPU architecture, downloads the
-matching GitHub Release artifact, verifies its checksum, installs Pester for the
+matching GitHub Release artifact, verifies its checksum, installs pester for the
 current user, installs the background service, and starts it.
 
-Pester does not require Rust, Python, Node.js, Java, Docker, or an external
+pester does not require Rust, Python, Node.js, Java, Docker, or an external
 notification command at runtime.
 
 ## Examples
@@ -109,7 +111,7 @@ pester test winddown
 
 ## Confirmation
 
-Pester requires full-word confirmations. Single-letter confirmations such as
+pester requires full-word confirmations. Single-letter confirmations such as
 `y` and `n` are not accepted.
 
 Commands that mark reminders done use `yes` by default:
@@ -125,7 +127,7 @@ You can set a custom confirmation phrase for `done` commands:
 pester confirm set
 ```
 
-Pester will prompt for the phrase interactively. This avoids shell quoting issues
+pester will prompt for the phrase interactively. This avoids shell quoting issues
 for punctuation, apostrophes, or quotation marks.
 
 You can also pass the phrase directly with `--phrase`:
@@ -195,7 +197,7 @@ done after midnight stops the reminder until the next 23:50 window.
 
 ### Linux
 
-Pester uses the Freedesktop notification service over the user D-Bus session.
+pester uses the Freedesktop notification service over the user D-Bus session.
 It does not shell out to `notify-send`.
 
 The installer creates a user-level systemd service:
@@ -216,36 +218,36 @@ notification daemon such as `dunst` or `mako`.
 
 ### macOS
 
-Pester uses the UserNotifications framework.
+pester uses the UserNotifications framework.
 
-Pester currently ships for Apple Silicon macOS only.
+pester currently ships for Apple Silicon macOS only.
 
 The installer installs:
 
 ```text
 ~/.local/bin/pester
-~/Applications/Pester.app
+~/Applications/pester.app
 ~/Library/LaunchAgents/com.aloglu.pester.plist
 ```
 
-The LaunchAgent runs the executable inside `Pester.app` so macOS has a stable
+The LaunchAgent runs the executable inside `pester.app` so macOS has a stable
 app identity for notification permissions.
 
 ### Windows
 
-Pester uses Windows Toast notifications.
+pester uses Windows Toast notifications.
 
 The installer installs:
 
 ```text
-%LOCALAPPDATA%\Programs\Pester\pester.exe
+%LOCALAPPDATA%\Programs\pester\pester.exe
 ```
 
 It also creates:
 
 ```text
-Scheduled Task: Pester, or a Startup shortcut fallback if Task Scheduler denies access
-Start Menu shortcut: Pester
+Scheduled Task: pester, or a Startup shortcut fallback if Task Scheduler denies access
+Start Menu shortcut: pester
 AppUserModelID: com.aloglu.pester
 ```
 
@@ -254,13 +256,13 @@ notification identity.
 
 ### WSL
 
-Pester is designed to send notifications through the operating system's native
+pester is designed to send notifications through the operating system's native
 notification system. Running the Linux build inside WSL does not automatically
 provide access to Windows Toast notifications. Unless the WSL environment has a
 working Freedesktop notification bridge, `pester system status --verbose` may
 report notifications as unavailable.
 
-For Windows notifications, install and run the Windows build of Pester from
+For Windows notifications, install and run the Windows build of pester from
 PowerShell.
 
 ## Troubleshooting
@@ -284,10 +286,10 @@ If notifications are unavailable on Linux, check that a user D-Bus session and a
 Freedesktop notification service are running.
 
 If notifications are unavailable on macOS, check System Settings -> Notifications
-and look for Pester.
+and look for pester.
 
 If notifications are unavailable on Windows, check Focus / Do Not Disturb,
-notification settings, and whether the Pester Start Menu shortcut exists.
+notification settings, and whether the pester Start Menu shortcut exists.
 
 If `pester` is not found after installation, ensure `~/.local/bin` is in `PATH`
 on Linux/macOS. The background service uses absolute paths and does not depend
@@ -295,13 +297,13 @@ on shell `PATH`.
 
 ## Uninstall
 
-Remove Pester but keep reminders and state:
+Remove pester but keep reminders and state:
 
 ```sh
 pester system uninstall
 ```
 
-Remove Pester and delete all reminders/state:
+Remove pester and delete all reminders/state:
 
 ```sh
 pester system uninstall --delete-data

@@ -10,7 +10,7 @@ use crate::store::Store;
 use crate::{parse_repeat_interval, parse_window_duration};
 
 pub fn run(store: Store) -> Result<()> {
-    tracing::info!("Pester daemon started.");
+    tracing::info!("pester daemon started.");
     loop {
         if let Err(error) = tick(&store) {
             tracing::error!("{error:#}");

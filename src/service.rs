@@ -99,7 +99,7 @@ mod platform {
 
     fn service_content(exe: &Path) -> String {
         format!(
-            "[Unit]\nDescription=Pester reminder daemon\n\n[Service]\nExecStart={} system daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=pester reminder daemon\n\n[Service]\nExecStart={} system daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
             systemd_quote_arg(&exe.display().to_string())
         )
     }
@@ -129,8 +129,8 @@ mod platform {
         #[test]
         fn quotes_systemd_exec_start_arguments() {
             assert_eq!(
-                systemd_quote_arg("/home/me/Pester App/pester"),
-                "\"/home/me/Pester App/pester\""
+                systemd_quote_arg("/home/me/pester app/pester"),
+                "\"/home/me/pester app/pester\""
             );
             assert_eq!(
                 systemd_quote_arg("/home/me/pester\"beta"),
@@ -148,9 +148,9 @@ mod platform {
 
         #[test]
         fn service_file_quotes_executable_path() {
-            let content = service_content(Path::new("/home/me/Pester App/pester"));
+            let content = service_content(Path::new("/home/me/pester app/pester"));
 
-            assert!(content.contains("ExecStart=\"/home/me/Pester App/pester\" system daemon"));
+            assert!(content.contains("ExecStart=\"/home/me/pester app/pester\" system daemon"));
         }
     }
 }
@@ -210,7 +210,7 @@ mod platform {
             );
             fs::remove_file(&plist)?;
         }
-        let app = home()?.join("Applications/Pester.app");
+        let app = home()?.join("Applications/pester.app");
         if app.exists() {
             fs::remove_dir_all(&app)
                 .with_context(|| format!("failed to remove {}", app.display()))?;
@@ -239,7 +239,7 @@ mod platform {
             .map(|home| home.join("Library/LaunchAgents/com.aloglu.pester.plist"));
         let app = home
             .as_ref()
-            .map(|home| home.join("Applications/Pester.app"));
+            .map(|home| home.join("Applications/pester.app"));
         vec![
             "service manager: launchd".to_string(),
             format!("service: {status}"),
@@ -280,7 +280,7 @@ mod platform {
     }
 
     fn daemon_executable() -> Result<std::path::PathBuf> {
-        let bundled = home()?.join("Applications/Pester.app/Contents/MacOS/pester");
+        let bundled = home()?.join("Applications/pester.app/Contents/MacOS/pester");
         if bundled.exists() {
             return Ok(bundled);
         }
@@ -315,7 +315,7 @@ mod platform {
         match install_scheduled_task(&exe) {
             Ok(()) => term::ok("Installed and started Scheduled Task."),
             Err(error) => {
-                let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
+                let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
                 create_startup_shortcut(&exe)?;
                 start_daemon(&exe)?;
                 term::warn(format!("Task Scheduler setup failed ({error:#})."));
@@ -326,8 +326,8 @@ mod platform {
     }
 
     pub fn uninstall(_paths: &Paths) -> Result<()> {
-        let _ = run("schtasks", &["/End", "/TN", "Pester"]);
-        let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
+        let _ = run("schtasks", &["/End", "/TN", "pester"]);
+        let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
         let _ = stop_daemon_processes();
         let _ = remove_start_menu_shortcut();
         let _ = remove_startup_shortcut();
@@ -336,7 +336,7 @@ mod platform {
 
     pub fn diagnostics(_paths: &Paths) -> Vec<String> {
         let output = Command::new("schtasks")
-            .args(["/Query", "/TN", "Pester"])
+            .args(["/Query", "/TN", "pester"])
             .output();
         let start_menu_shortcut = start_menu_shortcut_path();
         let startup_shortcut = startup_shortcut_path();
@@ -383,10 +383,10 @@ mod platform {
         run(
             "schtasks",
             &[
-                "/Create", "/TN", "Pester", "/SC", "ONLOGON", "/TR", &task, "/F",
+                "/Create", "/TN", "pester", "/SC", "ONLOGON", "/TR", &task, "/F",
             ],
         )?;
-        run("schtasks", &["/Run", "/TN", "Pester"])?;
+        run("schtasks", &["/Run", "/TN", "pester"])?;
         Ok(())
     }
 
@@ -402,7 +402,7 @@ mod platform {
             .stderr(Stdio::null())
             .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .spawn()
-            .context("failed to start Pester daemon")?;
+            .context("failed to start pester daemon")?;
         Ok(())
     }
 
@@ -441,7 +441,7 @@ mod platform {
             &start_menu_shortcut_path()?,
             exe,
             "system daemon",
-            "Pester reminder daemon",
+            "pester reminder daemon",
             SW_SHOWNORMAL,
         )
     }
@@ -452,7 +452,7 @@ mod platform {
             &startup_shortcut_path()?,
             &target,
             &arguments,
-            "Start Pester reminder daemon at login",
+            "Start pester reminder daemon at login",
             SW_HIDE,
         )
     }
@@ -503,31 +503,31 @@ mod platform {
                 .context("could not create Windows ShellLink COM object")?;
             shell_link
                 .SetPath(&HSTRING::from(exe.display().to_string()))
-                .context("could not set Pester shortcut path")?;
+                .context("could not set pester shortcut path")?;
             shell_link
                 .SetArguments(&HSTRING::from(arguments))
-                .context("could not set Pester shortcut arguments")?;
+                .context("could not set pester shortcut arguments")?;
             shell_link
                 .SetDescription(&HSTRING::from(description))
-                .context("could not set Pester shortcut description")?;
+                .context("could not set pester shortcut description")?;
             shell_link
                 .SetShowCmd(show_command)
-                .context("could not set Pester shortcut show command")?;
+                .context("could not set pester shortcut show command")?;
 
             let property_store: IPropertyStore = shell_link
                 .cast()
-                .context("could not access Pester shortcut property store")?;
+                .context("could not access pester shortcut property store")?;
             set_app_user_model_id(&property_store)?;
             property_store
                 .Commit()
-                .context("could not commit Pester shortcut properties")?;
+                .context("could not commit pester shortcut properties")?;
 
             let persist_file: IPersistFile = shell_link
                 .cast()
-                .context("could not access Pester shortcut persistence")?;
+                .context("could not access pester shortcut persistence")?;
             persist_file
                 .Save(&HSTRING::from(shortcut_path.display().to_string()), true)
-                .context("could not save Pester shortcut")?;
+                .context("could not save pester shortcut")?;
         }
 
         Ok(())
@@ -592,7 +592,7 @@ mod platform {
         let value = PROPVARIANT::from(APP_ID);
         property_store
             .SetValue(&PKEY_APP_USER_MODEL_ID, &value)
-            .context("could not set Pester AppUserModelID")
+            .context("could not set pester AppUserModelID")
     }
 
     struct ComApartment;

@@ -94,7 +94,7 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
     };
     let installed = PathBuf::from(local_app_data)
         .join("Programs")
-        .join("Pester")
+        .join("pester")
         .join("pester.exe");
     if current != installed || !current.exists() {
         return Ok(None);

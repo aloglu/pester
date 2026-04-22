@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn notification_app_name_is_stable() {
-        assert_eq!(app_name(), "Pester");
+        assert_eq!(app_name(), "pester");
         assert_eq!(app_id(), "com.aloglu.pester");
     }
 
