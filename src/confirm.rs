@@ -2,11 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::{bail, Result};
 
-use crate::models::Config;
+use crate::models::{Config, Reminder};
 use crate::term;
 
-pub fn confirm_done(config: &Config, prompt: &str) -> Result<()> {
-    match config.confirmation.done_phrase.as_deref() {
+pub fn confirm_done(config: &Config, reminder: Option<&Reminder>, prompt: &str) -> Result<()> {
+    match done_phrase(config, reminder) {
         Some(phrase) => {
             println!("{prompt}");
             println!("Type this phrase to confirm:");
@@ -26,6 +26,12 @@ pub fn confirm_done(config: &Config, prompt: &str) -> Result<()> {
             }
         }
     }
+}
+
+pub fn done_phrase<'a>(config: &'a Config, reminder: Option<&'a Reminder>) -> Option<&'a str> {
+    reminder
+        .and_then(|reminder| reminder.done_phrase.as_deref())
+        .or(config.confirmation.done_phrase.as_deref())
 }
 
 pub fn confirm_yes_no(prompt: &str) -> Result<bool> {
@@ -78,7 +84,9 @@ pub(crate) fn done_phrase_matches(input: &str, phrase: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{done_phrase_matches, parse_yes_no};
+    use crate::models::{Config, Confirmation, Reminder};
+
+    use super::{done_phrase, done_phrase_matches, parse_yes_no};
 
     #[test]
     fn parses_full_yes_no_only() {
@@ -101,5 +109,33 @@ mod tests {
             "I am a lazy person who should not cancel their reminders.",
             phrase
         ));
+    }
+
+    #[test]
+    fn reminder_done_phrase_overrides_global_phrase() {
+        let config = Config {
+            reminders: vec![],
+            confirmation: Confirmation {
+                done_phrase: Some("global".to_string()),
+            },
+        };
+        let reminder = Reminder {
+            id: "meds".to_string(),
+            title: "Medication".to_string(),
+            message: "Take medication.".to_string(),
+            time: "09:00".to_string(),
+            repeat_every: "5m".to_string(),
+            until: None,
+            active_for: None,
+            max_notifications: None,
+            done_phrase: Some("I took my medication".to_string()),
+            enabled: true,
+        };
+
+        assert_eq!(
+            done_phrase(&config, Some(&reminder)),
+            Some("I took my medication")
+        );
+        assert_eq!(done_phrase(&config, None), Some("global"));
     }
 }

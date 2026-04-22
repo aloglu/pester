@@ -183,7 +183,7 @@ if [ "$IS_MACOS" -eq 1 ]; then
 fi
 
 step "Starting background service"
-if ! INSTALL_OUTPUT="$("${INSTALL_DIR}/${BIN_NAME}" install 2>&1)"; then
+if ! INSTALL_OUTPUT="$("${INSTALL_DIR}/${BIN_NAME}" system install 2>&1)"; then
   fail "Background service installation failed."
   if [ "$INSTALL_OUTPUT" != "" ]; then
     details "$INSTALL_OUTPUT"
@@ -208,4 +208,4 @@ esac
 say ""
 say "${BOLD}Next steps:${RESET}"
 detail "pester add winddown --time 22:00 --every 5m --title \"Wind down\" --message \"No exciting stuff now.\""
-detail "pester status"
+detail "pester system status"

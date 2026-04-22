@@ -210,6 +210,7 @@ mod tests {
             until: None,
             active_for: None,
             max_notifications: None,
+            done_phrase: None,
             enabled: true,
         }
     }
@@ -224,6 +225,7 @@ mod tests {
             until: None,
             active_for: None,
             max_notifications: None,
+            done_phrase: None,
             enabled: true,
         }
     }

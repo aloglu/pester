@@ -285,12 +285,12 @@ try {
     Write-Ok "Installed to $InstalledExe"
 
     Write-Step "Starting background service"
-    $InstallOutput = & $InstalledExe install 2>&1
+    $InstallOutput = & $InstalledExe system install 2>&1
     if ($LASTEXITCODE -ne 0) {
         foreach ($Line in $InstallOutput) {
             Write-Detail ($Line.ToString())
         }
-        throw "pester install failed with exit code $LASTEXITCODE"
+        throw "pester system install failed with exit code $LASTEXITCODE"
     }
     foreach ($Line in $InstallOutput) {
         Write-Detail ($Line.ToString())
@@ -302,7 +302,7 @@ try {
     Write-Host ""
     Write-Host (Format-Text "Next steps:" "1")
     Write-Detail "pester add winddown --time 22:00 --every 5m --title `"Wind down`" --message `"No exciting stuff now.`""
-    Write-Detail "pester status"
+    Write-Detail "pester system status"
 }
 finally {
     Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue

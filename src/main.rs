@@ -12,9 +12,9 @@ mod term;
 use anyhow::{bail, Context, Result};
 use chrono::{Local, NaiveTime, Timelike};
 use clap::Parser;
-use cli::{Cli, Command, ConfirmCommand, ConfirmDoneCommand};
-use confirm::{confirm_delete, confirm_done, confirm_yes_no, read_phrase};
-use models::Reminder;
+use cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs};
+use confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
+use models::{Reminder, State};
 use store::Store;
 
 const DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT: u64 = 12;
@@ -78,24 +78,24 @@ fn main() -> Result<()> {
                 clear_max_notifications,
             },
         ),
-        Command::Done { target } => done(&store, target),
-        Command::Remove { id } => remove(&store, id),
-        Command::Enable { target } => set_enabled(&store, target, true),
-        Command::Disable { target } => set_enabled(&store, target, false),
-        Command::List => list(&store),
-        Command::Status => status(&store),
-        Command::Test { id } => test(&store, id),
-        Command::Confirm {
-            command: ConfirmCommand::Done { command },
-        } => match command {
-            ConfirmDoneCommand::Set { phrase } => set_done_phrase(&store, phrase),
-            ConfirmDoneCommand::Show => show_done_phrase(&store),
-            ConfirmDoneCommand::Reset => reset_done_phrase(&store),
+        Command::Done(target) => done(&store, target),
+        Command::Undone(target) => undone(&store, target),
+        Command::Remove(target) => remove(&store, target),
+        Command::Show(target) => show(&store, target),
+        Command::Enable(target) => set_enabled(&store, target, true),
+        Command::Disable(target) => set_enabled(&store, target, false),
+        Command::Test(target) => test(&store, target),
+        Command::Confirm { command } => match command {
+            ConfirmCommand::Set { id, phrase } => set_done_phrase(&store, id, phrase),
+            ConfirmCommand::Show { id } => show_done_phrase(&store, id),
+            ConfirmCommand::Reset { id } => reset_done_phrase(&store, id),
         },
-        Command::Install => service::install(&store.paths),
-        Command::Uninstall(args) => uninstall(&store, args.delete_data),
-        Command::Daemon => daemon::run(store),
-        Command::Doctor => doctor(&store),
+        Command::System { command } => match command {
+            SystemCommand::Status(args) => system_status(&store, args.verbose),
+            SystemCommand::Install => service::install(&store.paths),
+            SystemCommand::Uninstall(args) => uninstall(&store, args.delete_data),
+            SystemCommand::Daemon => daemon::run(store),
+        },
     }
 }
 
@@ -147,6 +147,7 @@ fn add_reminder(store: &Store, input: AddReminderInput) -> Result<()> {
         until,
         active_for,
         max_notifications,
+        done_phrase: None,
         enabled: true,
     });
     store.save_config(&config)?;
@@ -296,15 +297,16 @@ fn set_reminder(store: &Store, input: SetReminderInput) -> Result<()> {
     Ok(())
 }
 
-fn done(store: &Store, target: String) -> Result<()> {
+fn done(store: &Store, target: TargetArgs) -> Result<()> {
     let config = store.load_config()?;
     if config.reminders.is_empty() {
         bail!("no reminders exist");
     }
 
-    if target == "all" {
+    if target.all {
         confirm_done(
             &config,
+            None,
             "Mark all reminders done for today? This will stop every reminder until tomorrow.",
         )?;
         let mut state = store.load_state()?;
@@ -317,11 +319,13 @@ fn done(store: &Store, target: String) -> Result<()> {
         return Ok(());
     }
 
+    let target = target.id.expect("target id is required by clap");
     let reminder = config
         .reminder(&target)
         .with_context(|| format!("reminder \"{target}\" does not exist"))?;
     confirm_done(
         &config,
+        Some(reminder),
         &format!("Mark \"{}\" done for today?", reminder.id),
     )?;
 
@@ -335,8 +339,56 @@ fn done(store: &Store, target: String) -> Result<()> {
     Ok(())
 }
 
-fn remove(store: &Store, id: String) -> Result<()> {
+fn undone(store: &Store, target: TargetArgs) -> Result<()> {
+    let config = store.load_config()?;
+    if config.reminders.is_empty() {
+        bail!("no reminders exist");
+    }
+
+    let mut state = store.load_state()?;
+    let now = Local::now();
+    if target.all {
+        if !confirm_yes_no(
+            "Mark all reminders not done for today? This may restart reminder notifications.",
+        )? {
+            term::warn("Cancelled.");
+            return Ok(());
+        }
+
+        for reminder in &config.reminders {
+            state.mark_undone(daemon::state_date_for_now(reminder, now)?, &reminder.id);
+        }
+        store.save_state(&state)?;
+        term::ok("Marked all reminders not done for today.");
+        return Ok(());
+    }
+
+    let target = target.id.expect("target id is required by clap");
+    let reminder = config
+        .reminder(&target)
+        .with_context(|| format!("reminder \"{target}\" does not exist"))?;
+    state.mark_undone(daemon::state_date_for_now(reminder, now)?, &reminder.id);
+    store.save_state(&state)?;
+    term::ok(format!("Marked \"{}\" not done for today.", reminder.id));
+    Ok(())
+}
+
+fn remove(store: &Store, target: TargetArgs) -> Result<()> {
     let mut config = store.load_config()?;
+    if config.reminders.is_empty() {
+        bail!("no reminders exist");
+    }
+
+    if target.all {
+        confirm_delete("Remove all reminders? This cannot be undone.")?;
+        let count = config.reminders.len();
+        config.reminders.clear();
+        store.save_config(&config)?;
+        term::ok(format!("Removed {count} reminder(s)."));
+        return Ok(());
+    }
+
+    let id = target.id.expect("target id is required by clap");
     if config.reminder(&id).is_none() {
         bail!("reminder \"{id}\" does not exist");
     }
@@ -352,7 +404,7 @@ fn remove(store: &Store, id: String) -> Result<()> {
     Ok(())
 }
 
-fn set_enabled(store: &Store, target: String, enabled: bool) -> Result<()> {
+fn set_enabled(store: &Store, target: TargetArgs, enabled: bool) -> Result<()> {
     let mut config = store.load_config()?;
     if config.reminders.is_empty() {
         bail!("no reminders exist");
@@ -361,7 +413,7 @@ fn set_enabled(store: &Store, target: String, enabled: bool) -> Result<()> {
     let action = if enabled { "enable" } else { "disable" };
     let past = if enabled { "Enabled" } else { "Disabled" };
 
-    if target == "all" {
+    if target.all {
         if !enabled
             && !confirm_yes_no(
                 "Disable all reminders? This will stop every reminder until re-enabled.",
@@ -379,6 +431,7 @@ fn set_enabled(store: &Store, target: String, enabled: bool) -> Result<()> {
         return Ok(());
     }
 
+    let target = target.id.expect("target id is required by clap");
     let reminder = config
         .reminder_mut(&target)
         .with_context(|| format!("reminder \"{target}\" does not exist"))?;
@@ -386,90 +439,97 @@ fn set_enabled(store: &Store, target: String, enabled: bool) -> Result<()> {
     store.save_config(&config)?;
     term::ok(format!("{past} reminder \"{target}\"."));
     term::detail(format!(
-        "Run `pester {action} all` to {action} every reminder."
+        "Run `pester {action} --all` to {action} every reminder."
     ));
     Ok(())
 }
 
-fn list(store: &Store) -> Result<()> {
+fn show(store: &Store, target: TargetArgs) -> Result<()> {
     let config = store.load_config()?;
+    let state = store.load_state()?;
+    let now = Local::now();
     if config.reminders.is_empty() {
         term::heading("Reminders");
         term::warn("No reminders configured.");
         return Ok(());
     }
 
-    term::heading("Reminders");
-    for reminder in &config.reminders {
-        let state = if reminder.enabled {
-            term::green("enabled")
-        } else {
-            term::yellow("disabled")
-        };
-        println!();
-        println!("{}", term::bold(&reminder.id));
-        term::key_value("title", &reminder.title);
-        term::key_value("time", &reminder.time);
-        term::key_value("repeat", &reminder.repeat_every);
-        term::key_value("window", reminder_window_description(reminder));
-        term::key_value("state", state);
-    }
-    Ok(())
-}
-
-fn status(store: &Store) -> Result<()> {
-    let config = store.load_config()?;
-    let state = store.load_state()?;
-    let now = Local::now();
-    let today = now.date_naive();
-
-    term::heading("Pester Status");
-    term::key_value("config", store.paths.config_file.display());
-    term::key_value("state", store.paths.state_file.display());
-    term::key_value("today", today);
-
-    if config.reminders.is_empty() {
-        println!();
-        term::warn("No reminders configured.");
+    if target.all {
+        term::heading("Reminders");
+        for reminder in &config.reminders {
+            print_reminder(reminder, &state, now)?;
+        }
         return Ok(());
     }
 
+    let id = target.id.expect("target id is required by clap");
+    let reminder = config
+        .reminder(&id)
+        .with_context(|| format!("reminder \"{id}\" does not exist"))?;
+    term::heading("Reminder");
+    print_reminder(reminder, &state, now)
+}
+
+fn print_reminder(reminder: &Reminder, state: &State, now: chrono::DateTime<Local>) -> Result<()> {
+    let state_date = daemon::state_date_for_now(reminder, now)?;
+    let today_state = state.get(state_date, &reminder.id);
+    let done = today_state.map(|entry| entry.done).unwrap_or(false);
+    let status = if !reminder.enabled {
+        "disabled"
+    } else if done {
+        "done"
+    } else {
+        "pending"
+    };
+    let status = match status {
+        "disabled" => term::yellow(status),
+        "done" => term::green(status),
+        _ => term::blue(status),
+    };
     println!();
-    term::heading("Reminders");
-    for reminder in &config.reminders {
-        let state_date = daemon::state_date_for_now(reminder, now)?;
-        let today_state = state.get(state_date, &reminder.id);
-        let done = today_state.map(|entry| entry.done).unwrap_or(false);
-        let status = if !reminder.enabled {
-            "disabled"
-        } else if done {
-            "done"
-        } else {
-            "pending"
-        };
-        let status = match status {
-            "disabled" => term::yellow(status),
-            "done" => term::green(status),
-            _ => term::blue(status),
-        };
-        println!();
-        println!("{}", term::bold(&reminder.id));
-        term::key_value("status", status);
-        term::key_value("time", &reminder.time);
-        term::key_value("repeat", &reminder.repeat_every);
-        term::key_value("window", reminder_window_description(reminder));
-        if let Some(max_notifications) = reminder.max_notifications {
-            let count = today_state
-                .map(|entry| entry.notification_count)
-                .unwrap_or_default();
-            term::key_value("notifications", format!("{count}/{max_notifications}"));
-        }
+    println!("{}", term::bold(&reminder.id));
+    term::key_value("status", status);
+    term::key_value("title", &reminder.title);
+    term::key_value("time", &reminder.time);
+    term::key_value("repeat", &reminder.repeat_every);
+    term::key_value("window", reminder_window_description(reminder));
+    if let Some(max_notifications) = reminder.max_notifications {
+        let count = today_state
+            .map(|entry| entry.notification_count)
+            .unwrap_or_default();
+        term::key_value("notifications", format!("{count}/{max_notifications}"));
     }
     Ok(())
 }
 
-fn test(store: &Store, id: String) -> Result<()> {
+fn test(store: &Store, target: TargetArgs) -> Result<()> {
     let config = store.load_config()?;
+    if config.reminders.is_empty() {
+        bail!("no reminders exist");
+    }
+
+    if target.all {
+        if config.reminders.len() > 1
+            && !confirm_yes_no(&format!(
+                "Send test notifications for {} reminders?",
+                config.reminders.len()
+            ))?
+        {
+            term::warn("Cancelled.");
+            return Ok(());
+        }
+
+        for reminder in &config.reminders {
+            notify::send(reminder)?;
+        }
+        term::ok(format!(
+            "Sent test notifications for {} reminder(s).",
+            config.reminders.len()
+        ));
+        return Ok(());
+    }
+
+    let id = target.id.expect("target id is required by clap");
     let reminder = config
         .reminder(&id)
         .with_context(|| format!("reminder \"{id}\" does not exist"))?;
@@ -478,50 +538,108 @@ fn test(store: &Store, id: String) -> Result<()> {
     Ok(())
 }
 
-fn set_done_phrase(store: &Store, phrase: Option<String>) -> Result<()> {
+fn set_done_phrase(store: &Store, id: Option<String>, phrase: Option<String>) -> Result<()> {
+    let mut config = store.load_config()?;
+    if let Some(id) = id.as_deref() {
+        config
+            .reminder(id)
+            .with_context(|| format!("reminder \"{id}\" does not exist"))?;
+    }
+
+    let prompt = match id.as_deref() {
+        Some(id) => format!("Enter the phrase required to mark \"{id}\" done:"),
+        None => "Enter the global phrase required to mark reminders done:".to_string(),
+    };
     let phrase = match phrase {
         Some(phrase) => phrase,
-        None => read_phrase("Enter the phrase required to mark reminders done:")?,
+        None => read_phrase(&prompt)?,
     };
     let phrase = phrase.trim().to_string();
     if phrase.len() < 3 {
         bail!("confirmation phrase must be at least 3 characters");
     }
 
-    let mut config = store.load_config()?;
+    if let Some(id) = id {
+        let reminder = config
+            .reminder_mut(&id)
+            .expect("reminder existence was already checked");
+        reminder.done_phrase = Some(phrase);
+        store.save_config(&config)?;
+        term::ok(format!("Updated done confirmation phrase for \"{id}\"."));
+        return Ok(());
+    }
+
     config.confirmation.done_phrase = Some(phrase);
     store.save_config(&config)?;
-    term::ok("Updated done confirmation phrase.");
+    term::ok("Updated global done confirmation phrase.");
     Ok(())
 }
 
-fn show_done_phrase(store: &Store) -> Result<()> {
+fn show_done_phrase(store: &Store, id: Option<String>) -> Result<()> {
     let config = store.load_config()?;
-    match config.confirmation.done_phrase {
-        Some(phrase) => println!("{phrase}"),
-        None => term::warn("No custom done confirmation phrase is set. The default is yes."),
+    if let Some(id) = id {
+        let reminder = config
+            .reminder(&id)
+            .with_context(|| format!("reminder \"{id}\" does not exist"))?;
+
+        term::heading("Done Confirmation");
+        term::key_value("reminder", &reminder.id);
+        term::key_value(
+            "override phrase",
+            reminder.done_phrase.as_deref().unwrap_or("none"),
+        );
+        term::key_value(
+            "effective phrase",
+            done_phrase(&config, Some(reminder)).unwrap_or("yes"),
+        );
+        return Ok(());
+    }
+
+    term::heading("Done Confirmation");
+    match config.confirmation.done_phrase.as_deref() {
+        Some(phrase) => term::key_value("global phrase", phrase),
+        None => term::key_value("global phrase", "yes"),
     }
     Ok(())
 }
 
-fn reset_done_phrase(store: &Store) -> Result<()> {
-    if !confirm_yes_no("Reset done confirmation phrase to yes?")? {
+fn reset_done_phrase(store: &Store, id: Option<String>) -> Result<()> {
+    let mut config = store.load_config()?;
+
+    if let Some(id) = id {
+        config
+            .reminder(&id)
+            .with_context(|| format!("reminder \"{id}\" does not exist"))?;
+        if !confirm_yes_no(&format!(
+            "Reset done confirmation phrase for \"{id}\"? It will fall back to the global phrase."
+        ))? {
+            term::warn("Cancelled.");
+            return Ok(());
+        }
+
+        let reminder = config
+            .reminder_mut(&id)
+            .expect("reminder existence was already checked");
+        reminder.done_phrase = None;
+        store.save_config(&config)?;
+        term::ok(format!("Reset done confirmation phrase for \"{id}\"."));
+        return Ok(());
+    }
+
+    if !confirm_yes_no("Reset global done confirmation phrase to yes?")? {
         term::warn("Cancelled.");
         return Ok(());
     }
 
-    let mut config = store.load_config()?;
     config.confirmation.done_phrase = None;
     store.save_config(&config)?;
-    term::ok("Reset done confirmation phrase to yes.");
+    term::ok("Reset global done confirmation phrase to yes.");
     Ok(())
 }
 
 fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
     if delete_data {
-        confirm_delete(
-            "This will uninstall Pester and permanently delete all reminders and state.",
-        )?;
+        confirm_delete("Uninstall Pester and permanently delete all reminders and state?")?;
     } else if !confirm_yes_no(
         "Uninstall Pester and stop background reminders? Your reminders will be kept.",
     )? {
@@ -541,16 +659,22 @@ fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
     Ok(())
 }
 
-fn doctor(store: &Store) -> Result<()> {
-    term::heading("Pester Doctor");
-    term::key_value("config", store.paths.config_file.display());
-    term::key_value("state", store.paths.state_file.display());
-    term::key_value("binary", std::env::current_exe()?.display());
-    for line in notify::diagnostics() {
-        term::detail(line);
-    }
+fn system_status(store: &Store, verbose: bool) -> Result<()> {
+    term::heading("Pester System");
     for line in service::diagnostics(&store.paths) {
         term::detail(line);
+    }
+    if verbose {
+        println!();
+        term::heading("Paths");
+        term::key_value("config", store.paths.config_file.display());
+        term::key_value("state", store.paths.state_file.display());
+        term::key_value("binary", std::env::current_exe()?.display());
+        println!();
+        term::heading("Notifications");
+        for line in notify::diagnostics() {
+            term::detail(line);
+        }
     }
     Ok(())
 }
@@ -570,8 +694,11 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
         "list",
         "remove",
         "set",
+        "show",
         "status",
+        "system",
         "test",
+        "undone",
         "uninstall",
     ];
 

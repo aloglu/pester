@@ -99,7 +99,7 @@ mod platform {
 
     fn service_content(exe: &Path) -> String {
         format!(
-            "[Unit]\nDescription=Pester reminder daemon\n\n[Service]\nExecStart={} daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Pester reminder daemon\n\n[Service]\nExecStart={} system daemon\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
             systemd_quote_arg(&exe.display().to_string())
         )
     }
@@ -150,7 +150,7 @@ mod platform {
         fn service_file_quotes_executable_path() {
             let content = service_content(Path::new("/home/me/Pester App/pester"));
 
-            assert!(content.contains("ExecStart=\"/home/me/Pester App/pester\" daemon"));
+            assert!(content.contains("ExecStart=\"/home/me/Pester App/pester\" system daemon"));
         }
     }
 }
@@ -177,8 +177,9 @@ mod platform {
   <key>Label</key>
   <string>com.aloglu.pester</string>
   <key>ProgramArguments</key>
-  <array>
+    <array>
     <string>{}</string>
+    <string>system</string>
     <string>daemon</string>
   </array>
   <key>RunAtLoad</key>
@@ -378,7 +379,7 @@ mod platform {
     }
 
     fn install_scheduled_task(exe: &std::path::Path) -> Result<()> {
-        let task = format!("\"{}\" daemon", exe.display());
+        let task = format!("\"{}\" system daemon", exe.display());
         run(
             "schtasks",
             &[
@@ -394,6 +395,7 @@ mod platform {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
         Command::new(exe)
+            .arg("system")
             .arg("daemon")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -438,7 +440,7 @@ mod platform {
         create_shortcut(
             &start_menu_shortcut_path()?,
             exe,
-            "daemon",
+            "system daemon",
             "Pester reminder daemon",
             SW_SHOWNORMAL,
         )
@@ -457,8 +459,9 @@ mod platform {
 
     fn hidden_startup_command(exe: &std::path::Path) -> (PathBuf, String) {
         let exe = powershell_single_quoted(&exe.display().to_string());
-        let command =
-            format!("Start-Process -WindowStyle Hidden -FilePath {exe} -ArgumentList 'daemon'");
+        let command = format!(
+            "Start-Process -WindowStyle Hidden -FilePath {exe} -ArgumentList 'system daemon'"
+        );
         (
             powershell_path(),
             format!(

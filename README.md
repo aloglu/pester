@@ -65,7 +65,13 @@ pester done winddown
 Mark every reminder done for today:
 
 ```sh
-pester done all
+pester done --all
+```
+
+Mark a reminder not done for today:
+
+```sh
+pester undone winddown
 ```
 
 Change a reminder:
@@ -83,16 +89,16 @@ Temporarily disable or re-enable reminders:
 ```sh
 pester disable winddown
 pester enable winddown
-pester disable all
-pester enable all
+pester disable --all
+pester enable --all
 ```
 
-List reminders and inspect status:
+Show reminders and inspect system status:
 
 ```sh
-pester list
-pester status
-pester doctor
+pester show --all
+pester show winddown
+pester system status --verbose
 ```
 
 Send a test notification:
@@ -116,26 +122,35 @@ Type yes or no:
 You can set a custom confirmation phrase for `done` commands:
 
 ```sh
-pester confirm done set
+pester confirm set
 ```
 
 Pester will prompt for the phrase interactively. This avoids shell quoting issues
 for punctuation, apostrophes, or quotation marks.
 
-You can also pass the phrase directly:
+You can also pass the phrase directly with `--phrase`:
 
 ```sh
-pester confirm done set "I am a lazy person who shouldn't cancel their reminders."
+pester confirm set --phrase "I am a lazy person who shouldn't cancel their reminders."
 ```
 
-After that, `pester done <id>` and `pester done all` require the exact phrase
+After that, `pester done <id>` and `pester done --all` require the exact phrase
 instead of `yes`. The typed confirmation does not need surrounding quotes.
 
-Show or reset the custom phrase:
+Set a phrase for a specific reminder:
 
 ```sh
-pester confirm done show
-pester confirm done reset
+pester confirm set meds
+pester confirm set meds --phrase "I took my medication."
+```
+
+Reminder-specific phrases override the global phrase. Show or reset phrases:
+
+```sh
+pester confirm show
+pester confirm show meds
+pester confirm reset
+pester confirm reset meds
 ```
 
 Resetting the phrase requires confirmation.
@@ -145,21 +160,20 @@ Resetting the phrase requires confirmation.
 ```text
 pester add <id> --time HH:MM --every 5m --title <title> --message <message> [--until HH:MM] [--for 2h] [--max 3]
 pester set <id> [--time HH:MM] [--every 10m] [--until HH:MM] [--for 2h] [--max 3] [--clear-until] [--clear-for] [--clear-max] [--title <title>] [--message <message>]
-pester done <id>
-pester done all
-pester enable <id>
-pester enable all
-pester disable <id>
-pester disable all
-pester remove <id>
-pester list
-pester status
-pester test <id>
-pester doctor
-pester install
-pester uninstall
-pester uninstall --delete-data
-pester daemon
+pester remove <id> | --all
+pester show <id> | --all
+pester test <id> | --all
+pester done <id> | --all
+pester undone <id> | --all
+pester enable <id> | --all
+pester disable <id> | --all
+pester confirm set [<id>] [--phrase <phrase>]
+pester confirm show [<id>]
+pester confirm reset [<id>]
+pester system status [--verbose]
+pester system install
+pester system uninstall [--delete-data]
+pester system daemon
 ```
 
 Reminder ids may contain ASCII letters, numbers, hyphens, and underscores.
@@ -243,8 +257,8 @@ notification identity.
 Pester is designed to send notifications through the operating system's native
 notification system. Running the Linux build inside WSL does not automatically
 provide access to Windows Toast notifications. Unless the WSL environment has a
-working Freedesktop notification bridge, `pester doctor` may report
-notifications as unavailable.
+working Freedesktop notification bridge, `pester system status --verbose` may
+report notifications as unavailable.
 
 For Windows notifications, install and run the Windows build of Pester from
 PowerShell.
@@ -254,10 +268,10 @@ PowerShell.
 Run:
 
 ```sh
-pester doctor
+pester system status --verbose
 ```
 
-`doctor` reports:
+`system status --verbose` reports:
 
 - config path
 - state path
@@ -284,16 +298,16 @@ on shell `PATH`.
 Remove Pester but keep reminders and state:
 
 ```sh
-pester uninstall
+pester system uninstall
 ```
 
 Remove Pester and delete all reminders/state:
 
 ```sh
-pester uninstall --delete-data
+pester system uninstall --delete-data
 ```
 
-`uninstall --delete-data` requires typing `delete`.
+`system uninstall --delete-data` requires typing `delete`.
 
 ## Release Artifacts
 

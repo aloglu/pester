@@ -34,6 +34,8 @@ pub struct Reminder {
     pub active_for: Option<String>,
     #[serde(default, rename = "max", skip_serializing_if = "Option::is_none")]
     pub max_notifications: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_phrase: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -67,6 +69,10 @@ impl State {
 
     pub fn mark_done(&mut self, date: NaiveDate, reminder_id: &str) {
         self.entry_mut(date, reminder_id).done = true;
+    }
+
+    pub fn mark_undone(&mut self, date: NaiveDate, reminder_id: &str) {
+        self.entry_mut(date, reminder_id).done = false;
     }
 }
 
@@ -109,6 +115,17 @@ mod tests {
     }
 
     #[test]
+    fn marks_individual_reminder_undone_for_date() {
+        let mut state = State::default();
+        let date = NaiveDate::from_ymd_opt(2026, 4, 21).unwrap();
+
+        state.mark_done(date, "winddown");
+        state.mark_undone(date, "winddown");
+
+        assert!(!state.get(date, "winddown").unwrap().done);
+    }
+
+    #[test]
     fn serializes_config_as_toml() {
         let config = Config {
             reminders: vec![Reminder {
@@ -120,6 +137,7 @@ mod tests {
                 until: None,
                 active_for: None,
                 max_notifications: None,
+                done_phrase: None,
                 enabled: true,
             }],
             confirmation: Default::default(),
@@ -134,6 +152,7 @@ mod tests {
         assert!(decoded.reminders[0].until.is_none());
         assert!(decoded.reminders[0].active_for.is_none());
         assert!(decoded.reminders[0].max_notifications.is_none());
+        assert!(decoded.reminders[0].done_phrase.is_none());
     }
 
     #[test]
@@ -154,6 +173,7 @@ repeat_every = "5m"
         assert!(decoded.reminders[0].until.is_none());
         assert!(decoded.reminders[0].active_for.is_none());
         assert!(decoded.reminders[0].max_notifications.is_none());
+        assert!(decoded.reminders[0].done_phrase.is_none());
     }
 
     #[test]
@@ -168,6 +188,7 @@ repeat_every = "5m"
                 until: None,
                 active_for: Some("1h".to_string()),
                 max_notifications: Some(3),
+                done_phrase: None,
                 enabled: true,
             }],
             confirmation: Default::default(),
@@ -177,5 +198,33 @@ repeat_every = "5m"
 
         assert!(encoded.contains("for = \"1h\""));
         assert!(encoded.contains("max = 3"));
+    }
+
+    #[test]
+    fn serializes_reminder_done_phrase_when_present() {
+        let config = Config {
+            reminders: vec![Reminder {
+                id: "meds".to_string(),
+                title: "Medication".to_string(),
+                message: "Take medication.".to_string(),
+                time: "09:00".to_string(),
+                repeat_every: "5m".to_string(),
+                until: None,
+                active_for: None,
+                max_notifications: None,
+                done_phrase: Some("I took my medication".to_string()),
+                enabled: true,
+            }],
+            confirmation: Default::default(),
+        };
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+
+        assert!(encoded.contains("done_phrase = \"I took my medication\""));
+        assert_eq!(
+            decoded.reminders[0].done_phrase.as_deref(),
+            Some("I took my medication")
+        );
     }
 }
