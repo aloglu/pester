@@ -3,13 +3,14 @@ use std::io::{self, Write};
 use anyhow::{bail, Result};
 
 use crate::models::Config;
+use crate::term;
 
 pub fn confirm_done(config: &Config, prompt: &str) -> Result<()> {
     match config.confirmation.done_phrase.as_deref() {
         Some(phrase) => {
             println!("{prompt}");
             println!("Type this phrase to confirm:");
-            println!("{phrase}");
+            println!("{}", term::required_input(phrase));
             let input = read_line("> ")?;
             if done_phrase_matches(&input, phrase) {
                 Ok(())
@@ -29,13 +30,20 @@ pub fn confirm_done(config: &Config, prompt: &str) -> Result<()> {
 
 pub fn confirm_yes_no(prompt: &str) -> Result<bool> {
     println!("{prompt}");
-    let input = read_line("Type yes or no: ")?;
+    let input = read_line(&format!(
+        "Type {} or {}: ",
+        term::required_input("yes"),
+        term::required_input("no")
+    ))?;
     parse_yes_no(&input)
 }
 
 pub fn confirm_delete(prompt: &str) -> Result<()> {
     println!("{prompt}");
-    let input = read_line("Type delete to continue: ")?;
+    let input = read_line(&format!(
+        "Type {} to continue: ",
+        term::required_input("delete")
+    ))?;
     if input.trim() == "delete" {
         Ok(())
     } else {

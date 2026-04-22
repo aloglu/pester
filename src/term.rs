@@ -39,6 +39,10 @@ pub fn blue(value: impl Display) -> String {
     paint(value, "34")
 }
 
+pub fn required_input(value: impl Display) -> String {
+    paint(value, "1;33")
+}
+
 pub fn heading(value: impl Display) {
     println!("{}", bold(value));
 }
