@@ -24,6 +24,9 @@ fn cli_styles() -> Styles {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Add a reminder.
+    #[command(
+        override_usage = "pester add <ID> --time <TIME> --title <TITLE> --message <MESSAGE> [OPTIONS]"
+    )]
     Add {
         id: String,
         #[arg(long)]
@@ -50,6 +53,7 @@ pub enum Command {
         max_notifications: Option<u32>,
     },
     /// Change an existing reminder.
+    #[command(override_usage = "pester set <ID> [OPTIONS]")]
     Set {
         id: String,
         #[arg(long)]
@@ -133,4 +137,36 @@ pub enum ConfirmDoneCommand {
     Show,
     /// Reset done confirmation to yes.
     Reset,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    fn subcommand_help(name: &str) -> String {
+        let mut command = Cli::command();
+        command
+            .find_subcommand_mut(name)
+            .expect("subcommand exists")
+            .render_help()
+            .to_string()
+    }
+
+    #[test]
+    fn add_usage_places_id_before_options() {
+        let help = subcommand_help("add");
+
+        assert!(help.contains(
+            "Usage: pester add <ID> --time <TIME> --title <TITLE> --message <MESSAGE> [OPTIONS]"
+        ));
+    }
+
+    #[test]
+    fn set_usage_places_id_before_options() {
+        let help = subcommand_help("set");
+
+        assert!(help.contains("Usage: pester set <ID> [OPTIONS]"));
+    }
 }
