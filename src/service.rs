@@ -291,7 +291,7 @@ mod platform {
 mod platform {
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     use anyhow::{Context, Result};
     use windows::core::{Interface, HSTRING, PROPVARIANT};
@@ -317,9 +317,8 @@ mod platform {
                 let _ = run("schtasks", &["/Delete", "/TN", "Pester", "/F"]);
                 create_startup_shortcut(&exe)?;
                 start_daemon(&exe)?;
-                term::warn(format!(
-                    "Task Scheduler setup failed ({error:#}). Installed Startup shortcut fallback."
-                ));
+                term::warn(format!("Task Scheduler setup failed ({error:#})."));
+                term::ok("Installed and started Startup shortcut fallback.");
             }
         }
         Ok(())
@@ -392,10 +391,14 @@ mod platform {
 
     fn start_daemon(exe: &std::path::Path) -> Result<()> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
         Command::new(exe)
             .arg("daemon")
-            .creation_flags(DETACHED_PROCESS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
             .spawn()
             .context("failed to start Pester daemon")?;
         Ok(())
@@ -442,13 +445,42 @@ mod platform {
     }
 
     fn create_startup_shortcut(exe: &std::path::Path) -> Result<()> {
+        let (target, arguments) = hidden_startup_command(exe);
         create_shortcut(
             &startup_shortcut_path()?,
-            exe,
-            "daemon",
+            &target,
+            &arguments,
             "Start Pester reminder daemon at login",
             SW_HIDE,
         )
+    }
+
+    fn hidden_startup_command(exe: &std::path::Path) -> (PathBuf, String) {
+        let exe = powershell_single_quoted(&exe.display().to_string());
+        let command =
+            format!("Start-Process -WindowStyle Hidden -FilePath {exe} -ArgumentList 'daemon'");
+        (
+            powershell_path(),
+            format!(
+                "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"{command}\""
+            ),
+        )
+    }
+
+    fn powershell_path() -> PathBuf {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .map(|root| {
+                root.join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+            })
+            .unwrap_or_else(|| PathBuf::from("powershell.exe"))
+    }
+
+    fn powershell_single_quoted(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
     }
 
     fn create_shortcut(
