@@ -13,13 +13,21 @@ function Invoke-PesterCommand {
         [string[]] $Arguments
     )
 
+    $ArgumentPayload = [string]::Join("`n", $Arguments)
+
     $Job = Start-Job -ScriptBlock {
         param(
             [string] $Exe,
-            [string[]] $Arguments
+            [string] $ArgumentPayload
         )
 
         $ErrorActionPreference = "Stop"
+        if ([string]::IsNullOrEmpty($ArgumentPayload)) {
+            $Arguments = @()
+        } else {
+            $Arguments = $ArgumentPayload -split "`n"
+        }
+
         $Output = & $Exe @Arguments 2>&1
         if ($LASTEXITCODE -ne 0) {
             foreach ($Line in $Output) {
@@ -30,7 +38,7 @@ function Invoke-PesterCommand {
         foreach ($Line in $Output) {
             Write-Output $Line
         }
-    } -ArgumentList $ResolvedExe, (,$Arguments)
+    } -ArgumentList $ResolvedExe, $ArgumentPayload
 
     try {
         if (-not (Wait-Job -Job $Job -Timeout $TimeoutSeconds)) {
