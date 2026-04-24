@@ -309,14 +309,18 @@ mod platform {
     use crate::app::{APP_ID, APP_NAME};
     use crate::{paths::Paths, term};
 
-    pub fn install(_paths: &Paths) -> Result<()> {
+    pub fn install(paths: &Paths) -> Result<()> {
         let exe = std::env::current_exe()?;
         create_start_menu_shortcut(&exe)?;
-        match install_scheduled_task(&exe) {
-            Ok(()) => term::ok("Installed and started Scheduled Task."),
+        write_hidden_launcher(paths, &exe)?;
+        match install_scheduled_task(paths) {
+            Ok(()) => {
+                let _ = remove_startup_shortcut();
+                term::ok("Installed and started Scheduled Task.");
+            }
             Err(error) => {
                 let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
-                create_startup_shortcut(&exe)?;
+                create_startup_shortcut(paths)?;
                 start_daemon(&exe)?;
                 term::warn(format!("Task Scheduler setup failed ({error:#})."));
                 term::ok("Installed and started Startup shortcut fallback.");
@@ -325,12 +329,13 @@ mod platform {
         Ok(())
     }
 
-    pub fn uninstall(_paths: &Paths) -> Result<()> {
+    pub fn uninstall(paths: &Paths) -> Result<()> {
         let _ = run("schtasks", &["/End", "/TN", "pester"]);
         let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
         let _ = stop_daemon_processes();
         let _ = remove_start_menu_shortcut();
         let _ = remove_startup_shortcut();
+        let _ = remove_hidden_launcher(paths);
         Ok(())
     }
 
@@ -378,8 +383,8 @@ mod platform {
         ]
     }
 
-    fn install_scheduled_task(exe: &std::path::Path) -> Result<()> {
-        let task = format!("\"{}\" system daemon", exe.display());
+    fn install_scheduled_task(paths: &Paths) -> Result<()> {
+        let task = hidden_launcher_task_command(paths);
         run(
             "schtasks",
             &[
@@ -446,8 +451,8 @@ mod platform {
         )
     }
 
-    fn create_startup_shortcut(exe: &std::path::Path) -> Result<()> {
-        let (target, arguments) = hidden_startup_command(exe);
+    fn create_startup_shortcut(paths: &Paths) -> Result<()> {
+        let (target, arguments) = hidden_startup_command(paths);
         create_shortcut(
             &startup_shortcut_path()?,
             &target,
@@ -457,33 +462,63 @@ mod platform {
         )
     }
 
-    fn hidden_startup_command(exe: &std::path::Path) -> (PathBuf, String) {
-        let exe = powershell_single_quoted(&exe.display().to_string());
-        let command = format!(
-            "Start-Process -WindowStyle Hidden -FilePath {exe} -ArgumentList 'system daemon'"
+    fn write_hidden_launcher(paths: &Paths, exe: &std::path::Path) -> Result<()> {
+        std::fs::create_dir_all(&paths.config_dir)
+            .with_context(|| format!("failed to create {}", paths.config_dir.display()))?;
+        let script = format!(
+            "Set shell = CreateObject(\"WScript.Shell\")\r\nshell.Run \"{} system daemon\", 0, False\r\n",
+            vbscript_quoted_command_path(exe)
         );
-        (
-            powershell_path(),
-            format!(
-                "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command \"{command}\""
-            ),
+        let path = hidden_launcher_path(paths);
+        std::fs::write(&path, script)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    fn remove_hidden_launcher(paths: &Paths) -> Result<()> {
+        let path = hidden_launcher_path(paths);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    fn hidden_launcher_path(paths: &Paths) -> PathBuf {
+        paths.config_dir.join("pester-daemon.vbs")
+    }
+
+    fn hidden_launcher_task_command(paths: &Paths) -> String {
+        format!(
+            "{} {}",
+            command_line_quote_arg(&wscript_path().display().to_string()),
+            command_line_quote_arg(&hidden_launcher_path(paths).display().to_string())
         )
     }
 
-    fn powershell_path() -> PathBuf {
-        std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .map(|root| {
-                root.join("System32")
-                    .join("WindowsPowerShell")
-                    .join("v1.0")
-                    .join("powershell.exe")
-            })
-            .unwrap_or_else(|| PathBuf::from("powershell.exe"))
+    fn hidden_startup_command(paths: &Paths) -> (PathBuf, String) {
+        (
+            wscript_path(),
+            command_line_quote_arg(&hidden_launcher_path(paths).display().to_string()),
+        )
     }
 
-    fn powershell_single_quoted(value: &str) -> String {
-        format!("'{}'", value.replace('\'', "''"))
+    fn wscript_path() -> PathBuf {
+        std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .map(|root| root.join("System32").join("wscript.exe"))
+            .unwrap_or_else(|| PathBuf::from("wscript.exe"))
+    }
+
+    fn command_line_quote_arg(value: &str) -> String {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    }
+
+    fn vbscript_quoted_command_path(path: &std::path::Path) -> String {
+        format!(
+            "\"\"{}\"\"",
+            path.display().to_string().replace('"', "\"\"")
+        )
     }
 
     fn create_shortcut(
