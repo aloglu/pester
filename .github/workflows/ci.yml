@@ -32,7 +32,7 @@ jobs:
         run: cargo check
 
       - name: Check Windows target
-        run: cargo check --target x86_64-pc-windows-gnu
+        run: cargo check --target x86_64-pc-windows-gnu --bins
 
       - name: Check macOS target
         run: cargo check --target aarch64-apple-darwin
@@ -89,4 +89,4 @@ jobs:
           }
 
       - name: Check Windows MSVC
-        run: cargo check
+        run: cargo check --bins

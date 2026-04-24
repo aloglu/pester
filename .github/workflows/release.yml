@@ -34,7 +34,7 @@ jobs:
         run: cargo check
 
       - name: Check Windows target
-        run: cargo check --target x86_64-pc-windows-gnu
+        run: cargo check --target x86_64-pc-windows-gnu --bins
 
       - name: Check macOS target
         run: cargo check --target aarch64-apple-darwin
@@ -89,7 +89,7 @@ jobs:
           }
 
       - name: Check Windows MSVC
-        run: cargo check
+        run: cargo check --bins
 
   build:
     name: build ${{ matrix.target }}
@@ -131,7 +131,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --bins
 
       - name: Package version
         id: version
@@ -160,7 +160,20 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/pester.exe" "dist/pester.exe"
-          Compress-Archive -Path "dist/pester.exe" -DestinationPath "${{ matrix.artifact }}"
+          Copy-Item "target/${{ matrix.target }}/release/pesterd.exe" "dist/pesterd.exe"
+          Compress-Archive -Path "dist/pester.exe", "dist/pesterd.exe" -DestinationPath "${{ matrix.artifact }}"
+
+      - name: Verify Windows package
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $InspectDir = "inspect-${{ matrix.target }}"
+          Expand-Archive -Path "${{ matrix.artifact }}" -DestinationPath $InspectDir
+          foreach ($Expected in @("pester.exe", "pesterd.exe")) {
+              if (-not (Test-Path -LiteralPath (Join-Path $InspectDir $Expected))) {
+                  throw "${{ matrix.artifact }} is missing $Expected"
+              }
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
