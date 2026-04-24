@@ -78,14 +78,32 @@ function Test-Windows {
 function Get-TargetArchitecture {
     if ($env:PESTER_INSTALL_ARCH) {
         $Arch = $env:PESTER_INSTALL_ARCH
-    } elseif ("System.Runtime.InteropServices.RuntimeInformation" -as [type]) {
-        $Arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-    } elseif ($env:PROCESSOR_ARCHITEW6432) {
-        $Arch = $env:PROCESSOR_ARCHITEW6432
-    } elseif ($env:PROCESSOR_ARCHITECTURE) {
-        $Arch = $env:PROCESSOR_ARCHITECTURE
     } else {
-        throw "Could not detect processor architecture."
+        $Arch = $null
+        $RuntimeInformation = "System.Runtime.InteropServices.RuntimeInformation" -as [type]
+        if ($RuntimeInformation) {
+            try {
+                $RuntimeArchProperty = $RuntimeInformation.GetProperty("OSArchitecture")
+                if ($null -ne $RuntimeArchProperty) {
+                    $RuntimeArch = $RuntimeArchProperty.GetValue($null, $null)
+                    if ($null -ne $RuntimeArch) {
+                        $Arch = $RuntimeArch.ToString()
+                    }
+                }
+            } catch {
+                $Arch = $null
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($Arch) -and $env:PROCESSOR_ARCHITEW6432) {
+            $Arch = $env:PROCESSOR_ARCHITEW6432
+        }
+        if ([string]::IsNullOrWhiteSpace($Arch) -and $env:PROCESSOR_ARCHITECTURE) {
+            $Arch = $env:PROCESSOR_ARCHITECTURE
+        }
+        if ([string]::IsNullOrWhiteSpace($Arch)) {
+            throw "Could not detect processor architecture."
+        }
     }
 
     switch -Regex ($Arch) {
@@ -225,6 +243,51 @@ function Copy-InstalledBinary {
     }
 }
 
+function Invoke-PesterSystemInstall {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Executable,
+        [int] $TimeoutSeconds = 15
+    )
+
+    $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $StartInfo.FileName = $Executable
+    $StartInfo.Arguments = "system install"
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.CreateNoWindow = $true
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+
+    $Process = New-Object System.Diagnostics.Process
+    $Process.StartInfo = $StartInfo
+
+    [void] $Process.Start()
+    $Completed = $Process.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $Completed) {
+        try {
+            $Process.Kill()
+        } catch {
+        }
+        return [pscustomobject] @{
+            ExitCode = $null
+            TimedOut = $true
+            Lines = @("pester system install timed out after $TimeoutSeconds seconds; the background service may have completed setup before the installer stopped waiting.")
+        }
+    }
+
+    $Output = @()
+    $Output += $Process.StandardOutput.ReadToEnd() -split "`r?`n|`r" |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $Output += $Process.StandardError.ReadToEnd() -split "`r?`n|`r" |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+    return [pscustomobject] @{
+        ExitCode = $Process.ExitCode
+        TimedOut = $false
+        Lines = $Output
+    }
+}
+
 if (-not (Test-Windows)) {
     throw "Use install.sh on Linux and macOS."
 }
@@ -291,17 +354,17 @@ try {
     Write-Ok "Installed to $InstalledExe"
 
     Write-Step "Starting background service"
-    $InstallOutput = & $InstalledExe system install 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        foreach ($Line in $InstallOutput) {
-            Write-Detail ($Line.ToString())
-        }
-        throw "pester system install failed with exit code $LASTEXITCODE"
-    }
-    foreach ($Line in $InstallOutput) {
+    $InstallResult = Invoke-PesterSystemInstall $InstalledExe
+    foreach ($Line in $InstallResult.Lines) {
         Write-Detail ($Line.ToString())
     }
-    Write-Ok "Background service installed and started"
+    if ($InstallResult.TimedOut) {
+        Write-Ok "Background service setup command stopped waiting"
+    } elseif ($InstallResult.ExitCode -ne 0) {
+        throw "pester system install failed with exit code $($InstallResult.ExitCode)"
+    } else {
+        Write-Ok "Background service installed and started"
+    }
 
     Write-Step "Finishing setup"
     Write-Ok "pester is ready"
