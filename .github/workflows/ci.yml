@@ -29,13 +29,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Check Linux
-        run: cargo check
+        run: cargo check --bins
 
       - name: Check Windows target
         run: cargo check --target x86_64-pc-windows-gnu --bins
 
       - name: Check macOS target
-        run: cargo check --target aarch64-apple-darwin
+        run: cargo check --target aarch64-apple-darwin --bins
 
       - name: Shell syntax
         run: |
@@ -90,3 +90,18 @@ jobs:
 
       - name: Check Windows MSVC
         run: cargo check --bins
+
+      - name: Smoke Windows package
+        shell: pwsh
+        run: |
+          cargo build --release --bins
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item "target/release/pester.exe" "dist/pester.exe"
+          Copy-Item "target/release/pesterd.exe" "dist/pesterd.exe"
+          Compress-Archive -Path "dist/pester.exe", "dist/pesterd.exe" -DestinationPath "pester-windows-smoke.zip"
+          Expand-Archive -Path "pester-windows-smoke.zip" -DestinationPath "inspect"
+          foreach ($Expected in @("pester.exe", "pesterd.exe")) {
+              if (-not (Test-Path -LiteralPath (Join-Path "inspect" $Expected))) {
+                  throw "pester-windows-smoke.zip is missing $Expected"
+              }
+          }

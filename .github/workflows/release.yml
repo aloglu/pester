@@ -31,13 +31,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Check Linux
-        run: cargo check
+        run: cargo check --bins
 
       - name: Check Windows target
         run: cargo check --target x86_64-pc-windows-gnu --bins
 
       - name: Check macOS target
-        run: cargo check --target aarch64-apple-darwin
+        run: cargo check --target aarch64-apple-darwin --bins
 
       - name: Shell syntax
         run: |
