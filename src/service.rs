@@ -298,7 +298,8 @@ mod platform {
     use std::process::{Command, Stdio};
 
     use anyhow::{bail, Context, Result};
-    use windows::core::{Interface, HSTRING, PCWSTR, PROPVARIANT};
+    use windows::core::{w, Interface, HSTRING, PCWSTR, PROPVARIANT};
+    use windows::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
@@ -306,6 +307,10 @@ mod platform {
     use windows::Win32::System::Registry::{
         RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
         REG_VALUE_TYPE, RRF_RT_REG_SZ,
+    };
+    use windows::Win32::System::Threading::{
+        OpenEventW, OpenMutexW, ReleaseMutex, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
+        MUTEX_MODIFY_STATE, SYNCHRONIZATION_SYNCHRONIZE,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
     use windows::Win32::UI::Shell::{
@@ -317,6 +322,7 @@ mod platform {
     use crate::paths::Paths;
     use crate::term;
 
+    const DAEMON_STOP_WAIT_MS: u32 = 5_000;
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
     pub fn install(_paths: &Paths) -> Result<()> {
@@ -326,7 +332,11 @@ mod platform {
             let _ = remove_start_menu_shortcut();
             return Err(error);
         }
-        let _ = stop_daemon_processes(&daemon);
+        if let Err(error) = stop_running_daemon().context("failed to stop existing pester daemon") {
+            let _ = remove_login_startup();
+            let _ = remove_start_menu_shortcut();
+            return Err(error);
+        }
         if let Err(error) = start_daemon(&daemon) {
             let _ = remove_login_startup();
             let _ = remove_start_menu_shortcut();
@@ -337,11 +347,8 @@ mod platform {
     }
 
     pub fn uninstall(_paths: &Paths) -> Result<()> {
-        let daemon = daemon_executable().ok();
         let _ = remove_login_startup();
-        if let Some(daemon) = daemon.as_ref() {
-            let _ = stop_daemon_processes(daemon);
-        }
+        stop_running_daemon().context("failed to stop pester daemon")?;
         let _ = remove_start_menu_shortcut();
         Ok(())
     }
@@ -398,34 +405,55 @@ mod platform {
         Ok(())
     }
 
-    fn stop_daemon_processes(daemon: &std::path::Path) -> Result<()> {
-        let daemon = daemon.display().to_string().replace('\'', "''");
-        let script = format!(
-            "$Daemon = '{daemon}'; \
-             Get-CimInstance Win32_Process -Filter \"Name = 'pesterd.exe'\" | \
-             Where-Object {{ $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq [System.IO.Path]::GetFullPath($Daemon)) }} | \
-             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
-        );
-        run("powershell", &["-NoProfile", "-Command", &script])
-    }
-
-    fn run(program: &str, args: &[&str]) -> Result<()> {
-        let output = Command::new(program).args(args).output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let detail = stderr.trim();
-            let detail = if detail.is_empty() {
-                stdout.trim()
-            } else {
-                detail
-            };
-            if detail.is_empty() {
-                anyhow::bail!("{program} failed with status {}", output.status);
-            }
-            anyhow::bail!("{program} failed with status {}: {detail}", output.status);
+    fn stop_running_daemon() -> Result<()> {
+        if signal_daemon_stop()? {
+            wait_for_daemon_stop()?;
         }
         Ok(())
+    }
+
+    fn signal_daemon_stop() -> Result<bool> {
+        let handle =
+            match unsafe { OpenEventW(EVENT_MODIFY_STATE, false, w!("Local\\pester-daemon-stop")) }
+            {
+                Ok(handle) => handle,
+                Err(_) => return Ok(false),
+            };
+
+        let result = unsafe { SetEvent(handle) }.context("could not signal pester daemon to stop");
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        result.map(|_| true)
+    }
+
+    fn wait_for_daemon_stop() -> Result<()> {
+        let handle = match unsafe {
+            OpenMutexW(
+                SYNCHRONIZATION_SYNCHRONIZE | MUTEX_MODIFY_STATE,
+                false,
+                w!("Local\\pester-daemon"),
+            )
+        } {
+            Ok(handle) => handle,
+            Err(_) => return Ok(()),
+        };
+
+        let wait_result = unsafe { WaitForSingleObject(handle, DAEMON_STOP_WAIT_MS) };
+        let result = if wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED {
+            unsafe {
+                let _ = ReleaseMutex(handle);
+            }
+            Ok(())
+        } else if wait_result == WAIT_TIMEOUT {
+            bail!("pester daemon did not stop within 5 seconds")
+        } else {
+            bail!("failed while waiting for pester daemon to stop: {wait_result:?}")
+        };
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        result
     }
 
     fn create_start_menu_shortcut(exe: &std::path::Path) -> Result<()> {

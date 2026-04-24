@@ -10,12 +10,26 @@ use crate::schedule::{parse_repeat_interval, parse_window_duration};
 use crate::store::Store;
 
 pub fn run(store: Store) -> Result<()> {
+    run_with_shutdown(store, |duration| {
+        thread::sleep(duration);
+        false
+    })
+}
+
+pub fn run_with_shutdown<F>(store: Store, mut wait_for_shutdown: F) -> Result<()>
+where
+    F: FnMut(Duration) -> bool,
+{
     tracing::info!("pester daemon started.");
     loop {
         if let Err(error) = tick(&store) {
             tracing::error!("{error:#}");
         }
-        thread::sleep(duration_until_next_second(Local::now()));
+
+        if wait_for_shutdown(duration_until_next_second(Local::now())) {
+            tracing::info!("pester daemon stopped.");
+            return Ok(());
+        }
     }
 }
 

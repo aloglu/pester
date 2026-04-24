@@ -69,6 +69,7 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw scripts/smoke-windows-service.ps1)) | Out-Null
 
       - name: Installer platform selection
         shell: pwsh
@@ -105,3 +106,8 @@ jobs:
                   throw "pester-windows-smoke.zip is missing $Expected"
               }
           }
+
+      - name: Smoke Windows service lifecycle
+        shell: pwsh
+        run: |
+          ./scripts/smoke-windows-service.ps1 -Exe "target/release/pester.exe"

@@ -69,6 +69,7 @@ jobs:
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw scripts/smoke-windows-service.ps1)) | Out-Null
 
       - name: Installer platform selection
         shell: pwsh
@@ -90,6 +91,12 @@ jobs:
 
       - name: Check Windows MSVC
         run: cargo check --bins
+
+      - name: Smoke Windows service lifecycle
+        shell: pwsh
+        run: |
+          cargo build --release --bins
+          ./scripts/smoke-windows-service.ps1 -Exe "target/release/pester.exe"
 
   build:
     name: build ${{ matrix.target }}

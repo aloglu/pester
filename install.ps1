@@ -194,32 +194,63 @@ function Stop-InstalledPester {
         [string[]] $Executables
     )
 
-    try {
-        foreach ($Executable in $Executables) {
-            if (-not (Test-Path -LiteralPath $Executable)) {
-                continue
-            }
-
-            $ExecutablePath = [System.IO.Path]::GetFullPath($Executable)
-            $ExecutableName = [System.IO.Path]::GetFileName($Executable)
-            Get-CimInstance Win32_Process -Filter "Name = '$ExecutableName'" |
-                Where-Object {
-                    $_.ExecutablePath -and
-                        ([string]::Equals(
-                            [System.IO.Path]::GetFullPath($_.ExecutablePath),
-                            $ExecutablePath,
-                            [System.StringComparison]::OrdinalIgnoreCase
-                        ))
-                } |
-                ForEach-Object {
-                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-                }
+    $Targets = @()
+    foreach ($Executable in $Executables) {
+        if (Test-Path -LiteralPath $Executable) {
+            $Targets += [System.IO.Path]::GetFullPath($Executable)
         }
-    } catch {
-        Write-Warning "Could not stop existing pester processes: $_"
     }
 
-    Start-Sleep -Milliseconds 500
+    if ($Targets.Count -eq 0) {
+        return
+    }
+
+    $ProcessNames = $Targets |
+        ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_) } |
+        Sort-Object -Unique
+
+    foreach ($ProcessName in $ProcessNames) {
+        foreach ($Process in [System.Diagnostics.Process]::GetProcessesByName($ProcessName)) {
+            try {
+                $ProcessPath = $null
+                try {
+                    $ProcessPath = $Process.MainModule.FileName
+                } catch {
+                    continue
+                }
+
+                if ([string]::IsNullOrWhiteSpace($ProcessPath)) {
+                    continue
+                }
+
+                $ProcessPath = [System.IO.Path]::GetFullPath($ProcessPath)
+                $MatchesTarget = $false
+                foreach ($Target in $Targets) {
+                    if ([string]::Equals(
+                        $ProcessPath,
+                        $Target,
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )) {
+                        $MatchesTarget = $true
+                        break
+                    }
+                }
+
+                if (-not $MatchesTarget) {
+                    continue
+                }
+
+                if (-not $Process.HasExited) {
+                    $Process.Kill()
+                }
+                if (-not $Process.WaitForExit(3000)) {
+                    throw "Timed out waiting for $ProcessPath to exit."
+                }
+            } finally {
+                $Process.Dispose()
+            }
+        }
+    }
 }
 
 function Copy-InstalledBinary {
