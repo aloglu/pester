@@ -96,7 +96,7 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
         .join("Programs")
         .join("pester")
         .join("pester.exe");
-    if current != installed || !current.exists() {
+    if !windows_path_eq(current, &installed) || !current.exists() {
         return Ok(None);
     }
 
@@ -105,7 +105,8 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
          for ($i = 0; $i -lt 20; $i++) {{ \
            try {{ Remove-Item -LiteralPath '{}' -Force -ErrorAction Stop; exit 0 }} \
            catch {{ Start-Sleep -Milliseconds 500 }} \
-         }}",
+         }}; \
+         exit 1",
         current.display().to_string().replace('\'', "''")
     );
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -116,6 +117,14 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
         .spawn()
         .with_context(|| format!("failed to schedule removal of {}", current.display()))?;
     Ok(Some(current.to_path_buf()))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_path_eq(left: &Path, right: &Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

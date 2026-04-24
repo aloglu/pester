@@ -78,8 +78,14 @@ function Test-Windows {
 function Get-TargetArchitecture {
     if ($env:PESTER_INSTALL_ARCH) {
         $Arch = $env:PESTER_INSTALL_ARCH
-    } else {
+    } elseif ("System.Runtime.InteropServices.RuntimeInformation" -as [type]) {
         $Arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    } elseif ($env:PROCESSOR_ARCHITEW6432) {
+        $Arch = $env:PROCESSOR_ARCHITEW6432
+    } elseif ($env:PROCESSOR_ARCHITECTURE) {
+        $Arch = $env:PROCESSOR_ARCHITECTURE
+    } else {
+        throw "Could not detect processor architecture."
     }
 
     switch -Regex ($Arch) {

@@ -293,6 +293,8 @@ mod platform {
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use anyhow::{Context, Result};
     use windows::core::{Interface, HSTRING, PROPVARIANT};
@@ -423,7 +425,35 @@ mod platform {
     }
 
     fn run(program: &str, args: &[&str]) -> Result<()> {
-        let output = Command::new(program).args(args).output()?;
+        run_with_timeout(program, args, Duration::from_secs(10))
+    }
+
+    fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<()> {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .with_context(|| format!("{program} failed to start"))?;
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("{program} timed out after {}s", timeout.as_secs());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        let output = child.wait_with_output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
