@@ -65,49 +65,66 @@ impl Store {
         Ok(())
     }
 
-    pub fn delete_installed_binary(&self) -> Result<Option<PathBuf>> {
+    pub fn delete_installed_binaries(&self) -> Result<Vec<PathBuf>> {
         let current = std::env::current_exe()?;
-        delete_installed_binary(&current)
+        delete_installed_binaries(&current)
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
+fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
     let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let installed = home.join(".local/bin/pester");
     if current == installed && current.exists() {
         fs::remove_file(current)
             .with_context(|| format!("failed to remove {}", current.display()))?;
-        return Ok(Some(current.to_path_buf()));
+        return Ok(vec![current.to_path_buf()]);
     }
-    Ok(None)
+    Ok(Vec::new())
 }
 
 #[cfg(target_os = "windows")]
-fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
+fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
     use std::os::windows::process::CommandExt;
 
     let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let installed = PathBuf::from(local_app_data)
         .join("Programs")
         .join("pester")
         .join("pester.exe");
     if !windows_path_eq(current, &installed) || !current.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
+    let daemon = installed.with_file_name("pesterd.exe");
+    let mut targets = vec![current.to_path_buf()];
+    if daemon.exists() {
+        targets.push(daemon);
+    }
+    let quoted_targets = targets
+        .iter()
+        .map(|path| format!("'{}'", path.display().to_string().replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let script = format!(
-        "Start-Sleep -Milliseconds 500; \
+        "$Paths = @({quoted_targets}); \
+         Start-Sleep -Milliseconds 500; \
          for ($i = 0; $i -lt 20; $i++) {{ \
-           try {{ Remove-Item -LiteralPath '{}' -Force -ErrorAction Stop; exit 0 }} \
-           catch {{ Start-Sleep -Milliseconds 500 }} \
+           $Failed = $false; \
+           foreach ($Path in $Paths) {{ \
+             if (Test-Path -LiteralPath $Path) {{ \
+               try {{ Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }} \
+               catch {{ $Failed = $true }} \
+             }} \
+           }} \
+           if (-not $Failed) {{ exit 0 }} \
+           Start-Sleep -Milliseconds 500; \
          }}; \
-         exit 1",
-        current.display().to_string().replace('\'', "''")
+         exit 1"
     );
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -116,7 +133,7 @@ fn delete_installed_binary(current: &Path) -> Result<Option<PathBuf>> {
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .with_context(|| format!("failed to schedule removal of {}", current.display()))?;
-    Ok(Some(current.to_path_buf()))
+    Ok(targets)
 }
 
 #[cfg(target_os = "windows")]

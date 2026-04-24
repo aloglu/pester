@@ -241,12 +241,13 @@ The installer installs:
 
 ```text
 %LOCALAPPDATA%\Programs\pester\pester.exe
+%LOCALAPPDATA%\Programs\pester\pesterd.exe
 ```
 
 It also creates:
 
 ```text
-Scheduled Task: pester, or a Startup shortcut fallback if Task Scheduler denies access
+Login startup: HKCU\Software\Microsoft\Windows\CurrentVersion\Run\pester
 Start Menu shortcut: pester
 AppUserModelID: com.aloglu.pester
 ```

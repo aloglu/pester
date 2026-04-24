@@ -6,8 +6,8 @@ use chrono::{DateTime, Days, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::models::{Config, Reminder, State};
 use crate::notify;
+use crate::schedule::{parse_repeat_interval, parse_window_duration};
 use crate::store::Store;
-use crate::{parse_repeat_interval, parse_window_duration};
 
 pub fn run(store: Store) -> Result<()> {
     tracing::info!("pester daemon started.");
@@ -90,7 +90,7 @@ pub(crate) fn due_reminders(
     Ok(due)
 }
 
-pub(crate) fn state_date_for_now(reminder: &Reminder, now: DateTime<Local>) -> Result<NaiveDate> {
+pub fn state_date_for_now(reminder: &Reminder, now: DateTime<Local>) -> Result<NaiveDate> {
     Ok(active_window(reminder, now)?
         .map(|window| window.state_date)
         .unwrap_or_else(|| now.date_naive()))

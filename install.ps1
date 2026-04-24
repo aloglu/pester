@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "aloglu/pester"
 $BinName = "pester.exe"
+$DaemonBinName = "pesterd.exe"
 $Step = 0
 $TotalSteps = 5
 
@@ -190,30 +191,30 @@ function Add-UserPathEntry {
 function Stop-InstalledPester {
     param(
         [Parameter(Mandatory = $true)]
-        [string] $Executable
+        [string[]] $Executables
     )
 
-    if (-not (Test-Path -LiteralPath $Executable)) {
-        return
-    }
-
-    & schtasks /End /TN pester 2>$null | Out-Null
-    & schtasks /Delete /TN pester /F 2>$null | Out-Null
-
-    $ExecutablePath = [System.IO.Path]::GetFullPath($Executable)
     try {
-        Get-CimInstance Win32_Process -Filter "Name = 'pester.exe'" |
-            Where-Object {
-                $_.ExecutablePath -and
-                    ([string]::Equals(
-                        [System.IO.Path]::GetFullPath($_.ExecutablePath),
-                        $ExecutablePath,
-                        [System.StringComparison]::OrdinalIgnoreCase
-                    ))
-            } |
-            ForEach-Object {
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        foreach ($Executable in $Executables) {
+            if (-not (Test-Path -LiteralPath $Executable)) {
+                continue
             }
+
+            $ExecutablePath = [System.IO.Path]::GetFullPath($Executable)
+            $ExecutableName = [System.IO.Path]::GetFileName($Executable)
+            Get-CimInstance Win32_Process -Filter "Name = '$ExecutableName'" |
+                Where-Object {
+                    $_.ExecutablePath -and
+                        ([string]::Equals(
+                            [System.IO.Path]::GetFullPath($_.ExecutablePath),
+                            $ExecutablePath,
+                            [System.StringComparison]::OrdinalIgnoreCase
+                        ))
+                } |
+                ForEach-Object {
+                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+        }
     } catch {
         Write-Warning "Could not stop existing pester processes: $_"
     }
@@ -243,51 +244,6 @@ function Copy-InstalledBinary {
     }
 }
 
-function Invoke-PesterSystemInstall {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Executable,
-        [int] $TimeoutSeconds = 15
-    )
-
-    $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $StartInfo.FileName = $Executable
-    $StartInfo.Arguments = "system install"
-    $StartInfo.UseShellExecute = $false
-    $StartInfo.CreateNoWindow = $true
-    $StartInfo.RedirectStandardOutput = $true
-    $StartInfo.RedirectStandardError = $true
-
-    $Process = New-Object System.Diagnostics.Process
-    $Process.StartInfo = $StartInfo
-
-    [void] $Process.Start()
-    $Completed = $Process.WaitForExit($TimeoutSeconds * 1000)
-    if (-not $Completed) {
-        try {
-            $Process.Kill()
-        } catch {
-        }
-        return [pscustomobject] @{
-            ExitCode = $null
-            TimedOut = $true
-            Lines = @("pester system install timed out after $TimeoutSeconds seconds; the background service may have completed setup before the installer stopped waiting.")
-        }
-    }
-
-    $Output = @()
-    $Output += $Process.StandardOutput.ReadToEnd() -split "`r?`n|`r" |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    $Output += $Process.StandardError.ReadToEnd() -split "`r?`n|`r" |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-    return [pscustomobject] @{
-        ExitCode = $Process.ExitCode
-        TimedOut = $false
-        Lines = $Output
-    }
-}
-
 if (-not (Test-Windows)) {
     throw "Use install.sh on Linux and macOS."
 }
@@ -314,6 +270,7 @@ $BaseUrl = "https://github.com/$Repo/releases/latest/download"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\pester"
 $InstalledExe = Join-Path $InstallDir $BinName
+$InstalledDaemonExe = Join-Path $InstallDir $DaemonBinName
 
 New-Item -ItemType Directory -Path $TempDir | Out-Null
 
@@ -346,25 +303,35 @@ try {
 
     Write-Step "Installing binary"
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Stop-InstalledPester $InstalledExe
     Expand-Archive -Path (Join-Path $TempDir $Artifact) -DestinationPath $TempDir -Force
-    Copy-InstalledBinary (Join-Path $TempDir $BinName) $InstalledExe
+    $ExtractedExe = Join-Path $TempDir $BinName
+    $ExtractedDaemonExe = Join-Path $TempDir $DaemonBinName
+    if (-not (Test-Path -LiteralPath $ExtractedExe)) {
+        throw "Release artifact is missing $BinName"
+    }
+    if (-not (Test-Path -LiteralPath $ExtractedDaemonExe)) {
+        throw "Release artifact is missing $DaemonBinName"
+    }
+
+    Stop-InstalledPester @($InstalledExe, $InstalledDaemonExe)
+    Copy-InstalledBinary $ExtractedExe $InstalledExe
+    Copy-InstalledBinary $ExtractedDaemonExe $InstalledDaemonExe
 
     Add-UserPathEntry $InstallDir
-    Write-Ok "Installed to $InstalledExe"
+    Write-Ok "Installed to $InstallDir"
 
     Write-Step "Starting background service"
-    $InstallResult = Invoke-PesterSystemInstall $InstalledExe
-    foreach ($Line in $InstallResult.Lines) {
+    $InstallOutput = & $InstalledExe system install 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        foreach ($Line in $InstallOutput) {
+            Write-Detail ($Line.ToString())
+        }
+        throw "pester system install failed with exit code $LASTEXITCODE"
+    }
+    foreach ($Line in $InstallOutput) {
         Write-Detail ($Line.ToString())
     }
-    if ($InstallResult.TimedOut) {
-        Write-Ok "Background service setup command stopped waiting"
-    } elseif ($InstallResult.ExitCode -ne 0) {
-        throw "pester system install failed with exit code $($InstallResult.ExitCode)"
-    } else {
-        Write-Ok "Background service installed and started"
-    }
+    Write-Ok "Background service installed and started"
 
     Write-Step "Finishing setup"
     Write-Ok "pester is ready"

@@ -1,21 +1,12 @@
-mod app;
-mod cli;
-mod confirm;
-mod daemon;
-mod models;
-mod notify;
-mod paths;
-mod service;
-mod store;
-mod term;
-
 use anyhow::{bail, Context, Result};
-use chrono::{Local, NaiveTime, Timelike};
+use chrono::{Local, Timelike};
 use clap::Parser;
-use cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs};
-use confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
-use models::{Reminder, State};
-use store::Store;
+use pester::cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs};
+use pester::confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
+use pester::models::{Reminder, State};
+use pester::schedule::{parse_repeat_interval, parse_time, parse_window_duration};
+use pester::store::Store;
+use pester::{daemon, notify, service, term};
 
 const DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT: u64 = 12;
 
@@ -651,9 +642,13 @@ fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
     if delete_data {
         store.delete_data()?;
     }
-    match store.delete_installed_binary()? {
-        Some(path) => term::ok(format!("Removed binary at {}.", path.display())),
-        None => term::warn("No installed binary was removed from the current development path."),
+    let removed_binaries = store.delete_installed_binaries()?;
+    if removed_binaries.is_empty() {
+        term::warn("No installed binary was removed from the current development path.");
+    } else {
+        for path in removed_binaries {
+            term::ok(format!("Removed binary at {}.", path.display()));
+        }
     }
     term::ok("Uninstalled pester.");
     Ok(())
@@ -715,35 +710,6 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
         bail!("reminder id may only contain letters, numbers, hyphens, and underscores");
     }
     Ok(())
-}
-
-pub(crate) fn parse_time(time: &str) -> Result<NaiveTime> {
-    if time.len() != 5 || time.as_bytes().get(2) != Some(&b':') {
-        bail!("time must be in 24-hour HH:MM format");
-    }
-
-    NaiveTime::parse_from_str(time, "%H:%M").context("time must be in 24-hour HH:MM format")
-}
-
-pub(crate) fn parse_repeat_interval(every: &str) -> Result<std::time::Duration> {
-    let duration = humantime::parse_duration(every)
-        .context("repeat interval must look like 5m, 30m, or 1h")?;
-    if duration.is_zero() {
-        bail!("repeat interval must be greater than zero");
-    }
-    Ok(duration)
-}
-
-pub(crate) fn parse_window_duration(value: &str) -> Result<std::time::Duration> {
-    let duration =
-        humantime::parse_duration(value).context("--for must look like 30m, 2h, or 3h10m")?;
-    if duration.is_zero() {
-        bail!("--for must be greater than zero");
-    }
-    if duration >= std::time::Duration::from_secs(24 * 60 * 60) {
-        bail!("--for must be shorter than 24h to avoid overlapping daily windows");
-    }
-    Ok(duration)
 }
 
 fn validate_max_notifications(max_notifications: u32) -> Result<()> {

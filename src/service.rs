@@ -290,120 +290,105 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::ffi::OsStr;
+    use std::iter;
+    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
-    use std::thread;
-    use std::time::{Duration, Instant};
 
-    use anyhow::{Context, Result};
-    use windows::core::{Interface, HSTRING, PROPVARIANT};
+    use anyhow::{bail, Context, Result};
+    use windows::core::{Interface, HSTRING, PCWSTR, PROPVARIANT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     };
+    use windows::Win32::System::Registry::{
+        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+        REG_VALUE_TYPE, RRF_RT_REG_SZ,
+    };
     use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
     use windows::Win32::UI::Shell::{
-        FOLDERID_StartMenu, FOLDERID_Startup, IShellLinkW, SHGetKnownFolderPath, ShellLink,
+        FOLDERID_StartMenu, IShellLinkW, SHGetKnownFolderPath, ShellLink,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWNORMAL};
+    use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_SHOWNORMAL};
 
     use crate::app::{APP_ID, APP_NAME};
-    use crate::{paths::Paths, term};
+    use crate::paths::Paths;
+    use crate::term;
 
-    pub fn install(paths: &Paths) -> Result<()> {
-        let exe = std::env::current_exe()?;
-        create_start_menu_shortcut(&exe)?;
-        write_hidden_launcher(paths, &exe)?;
-        match install_scheduled_task(paths) {
-            Ok(()) => {
-                let _ = remove_startup_shortcut();
-                term::ok("Installed and started Scheduled Task.");
-            }
-            Err(error) => {
-                let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
-                create_startup_shortcut(paths)?;
-                start_daemon(&exe)?;
-                term::warn(format!("Task Scheduler setup failed ({error:#})."));
-                term::ok("Installed and started Startup shortcut fallback.");
-            }
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    pub fn install(_paths: &Paths) -> Result<()> {
+        let daemon = daemon_executable()?;
+        create_start_menu_shortcut(&daemon)?;
+        if let Err(error) = install_login_startup(&daemon) {
+            let _ = remove_start_menu_shortcut();
+            return Err(error);
         }
+        let _ = stop_daemon_processes(&daemon);
+        if let Err(error) = start_daemon(&daemon) {
+            let _ = remove_login_startup();
+            let _ = remove_start_menu_shortcut();
+            return Err(error);
+        }
+        term::ok("Installed and started Windows login startup.");
         Ok(())
     }
 
-    pub fn uninstall(paths: &Paths) -> Result<()> {
-        let _ = run("schtasks", &["/End", "/TN", "pester"]);
-        let _ = run("schtasks", &["/Delete", "/TN", "pester", "/F"]);
-        let _ = stop_daemon_processes();
+    pub fn uninstall(_paths: &Paths) -> Result<()> {
+        let daemon = daemon_executable().ok();
+        let _ = remove_login_startup();
+        if let Some(daemon) = daemon.as_ref() {
+            let _ = stop_daemon_processes(daemon);
+        }
         let _ = remove_start_menu_shortcut();
-        let _ = remove_startup_shortcut();
-        let _ = remove_hidden_launcher(paths);
         Ok(())
     }
 
     pub fn diagnostics(_paths: &Paths) -> Vec<String> {
-        let output = Command::new("schtasks")
-            .args(["/Query", "/TN", "pester"])
-            .output();
         let start_menu_shortcut = start_menu_shortcut_path();
-        let startup_shortcut = startup_shortcut_path();
-        let startup_installed = startup_shortcut
-            .as_ref()
-            .map(|path| path.exists())
-            .unwrap_or(false);
-        let (manager, status) = match output {
-            Ok(output) => {
-                let task_installed = output.status.success();
-                let status = match (task_installed, startup_installed) {
-                    (true, true) => "installed (Task Scheduler and Startup shortcut fallback)",
-                    (true, false) => "installed (Task Scheduler)",
-                    (false, true) => "installed (Startup shortcut fallback)",
-                    (false, false) => "not installed",
-                };
-                ("Windows Task Scheduler", status)
-            }
-            Err(_) => (
-                "unavailable (schtasks failed to run)",
-                if startup_installed {
-                    "installed (Startup shortcut fallback)"
-                } else {
-                    "unknown"
-                },
-            ),
+        let login_startup = login_startup_status();
+        let expected_startup = daemon_executable()
+            .ok()
+            .map(|path| command_line_quote_arg(&path.display().to_string()));
+        let status = match &login_startup {
+            Ok(Some(value)) if expected_startup.as_ref() == Some(value) => "installed",
+            Ok(Some(_)) => "installed (different target)",
+            Ok(None) => "not installed",
+            Err(_) => "unknown",
         };
         vec![
-            format!("service manager: {manager}"),
+            "service manager: Windows per-user Run key".to_string(),
             format!("service: {status}"),
             format!(
                 "start menu shortcut: {}",
                 shortcut_status(start_menu_shortcut.as_ref())
             ),
             format!(
-                "startup shortcut fallback: {}",
-                shortcut_status(startup_shortcut.as_ref())
+                "login startup: {}",
+                run_value_status(login_startup.as_ref())
             ),
         ]
     }
 
-    fn install_scheduled_task(paths: &Paths) -> Result<()> {
-        let task = hidden_launcher_task_command(paths);
-        run(
-            "schtasks",
-            &[
-                "/Create", "/TN", "pester", "/SC", "ONLOGON", "/TR", &task, "/F",
-            ],
-        )?;
-        run("schtasks", &["/Run", "/TN", "pester"])?;
-        Ok(())
+    fn daemon_executable() -> Result<PathBuf> {
+        let exe = std::env::current_exe()?;
+        let daemon = exe.with_file_name("pesterd.exe");
+        if !daemon.exists() {
+            bail!(
+                "Windows daemon executable is missing: {}. Reinstall pester from a complete Windows artifact.",
+                daemon.display()
+            );
+        }
+        Ok(daemon)
     }
 
-    fn start_daemon(exe: &std::path::Path) -> Result<()> {
+    fn start_daemon(daemon: &std::path::Path) -> Result<()> {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-        Command::new(exe)
-            .arg("system")
-            .arg("daemon")
+        Command::new(daemon)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -413,47 +398,19 @@ mod platform {
         Ok(())
     }
 
-    fn stop_daemon_processes() -> Result<()> {
-        let current_pid = std::process::id();
+    fn stop_daemon_processes(daemon: &std::path::Path) -> Result<()> {
+        let daemon = daemon.display().to_string().replace('\'', "''");
         let script = format!(
-            "$CurrentPid = {current_pid}; \
-             Get-CimInstance Win32_Process -Filter \"Name = 'pester.exe'\" | \
-             Where-Object {{ $_.ProcessId -ne $CurrentPid -and $_.CommandLine -like '* daemon*' }} | \
+            "$Daemon = '{daemon}'; \
+             Get-CimInstance Win32_Process -Filter \"Name = 'pesterd.exe'\" | \
+             Where-Object {{ $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq [System.IO.Path]::GetFullPath($Daemon)) }} | \
              ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
         );
         run("powershell", &["-NoProfile", "-Command", &script])
     }
 
     fn run(program: &str, args: &[&str]) -> Result<()> {
-        run_with_timeout(program, args, Duration::from_secs(10))
-    }
-
-    fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<()> {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-        let mut child = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .with_context(|| format!("{program} failed to start"))?;
-
-        let deadline = Instant::now() + timeout;
-        loop {
-            if child.try_wait()?.is_some() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                anyhow::bail!("{program} timed out after {}s", timeout.as_secs());
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-
-        let output = child.wait_with_output()?;
+        let output = Command::new(program).args(args).output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -475,80 +432,14 @@ mod platform {
         create_shortcut(
             &start_menu_shortcut_path()?,
             exe,
-            "system daemon",
+            "",
             "pester reminder daemon",
             SW_SHOWNORMAL,
         )
     }
 
-    fn create_startup_shortcut(paths: &Paths) -> Result<()> {
-        let (target, arguments) = hidden_startup_command(paths);
-        create_shortcut(
-            &startup_shortcut_path()?,
-            &target,
-            &arguments,
-            "Start pester reminder daemon at login",
-            SW_HIDE,
-        )
-    }
-
-    fn write_hidden_launcher(paths: &Paths, exe: &std::path::Path) -> Result<()> {
-        std::fs::create_dir_all(&paths.config_dir)
-            .with_context(|| format!("failed to create {}", paths.config_dir.display()))?;
-        let script = format!(
-            "Set shell = CreateObject(\"WScript.Shell\")\r\nshell.Run \"{} system daemon\", 0, False\r\n",
-            vbscript_quoted_command_path(exe)
-        );
-        let path = hidden_launcher_path(paths);
-        std::fs::write(&path, script)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        Ok(())
-    }
-
-    fn remove_hidden_launcher(paths: &Paths) -> Result<()> {
-        let path = hidden_launcher_path(paths);
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("failed to remove {}", path.display()))?;
-        }
-        Ok(())
-    }
-
-    fn hidden_launcher_path(paths: &Paths) -> PathBuf {
-        paths.config_dir.join("pester-daemon.vbs")
-    }
-
-    fn hidden_launcher_task_command(paths: &Paths) -> String {
-        format!(
-            "{} {}",
-            command_line_quote_arg(&wscript_path().display().to_string()),
-            command_line_quote_arg(&hidden_launcher_path(paths).display().to_string())
-        )
-    }
-
-    fn hidden_startup_command(paths: &Paths) -> (PathBuf, String) {
-        (
-            wscript_path(),
-            command_line_quote_arg(&hidden_launcher_path(paths).display().to_string()),
-        )
-    }
-
-    fn wscript_path() -> PathBuf {
-        std::env::var_os("SystemRoot")
-            .map(PathBuf::from)
-            .map(|root| root.join("System32").join("wscript.exe"))
-            .unwrap_or_else(|| PathBuf::from("wscript.exe"))
-    }
-
     fn command_line_quote_arg(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\\\""))
-    }
-
-    fn vbscript_quoted_command_path(path: &std::path::Path) -> String {
-        format!(
-            "\"\"{}\"\"",
-            path.display().to_string().replace('"', "\"\"")
-        )
     }
 
     fn create_shortcut(
@@ -603,11 +494,6 @@ mod platform {
         remove_shortcut(&shortcut_path)
     }
 
-    fn remove_startup_shortcut() -> Result<()> {
-        let shortcut_path = startup_shortcut_path()?;
-        remove_shortcut(&shortcut_path)
-    }
-
     fn remove_shortcut(shortcut_path: &std::path::Path) -> Result<()> {
         if shortcut_path.exists() {
             std::fs::remove_file(shortcut_path)
@@ -622,10 +508,6 @@ mod platform {
             .join("Programs")
             .join(APP_NAME)
             .join(format!("{APP_NAME}.lnk")))
-    }
-
-    fn startup_shortcut_path() -> Result<PathBuf> {
-        Ok(known_folder_path(&FOLDERID_Startup)?.join(format!("{APP_NAME}.lnk")))
     }
 
     fn shortcut_status(path: std::result::Result<&PathBuf, &anyhow::Error>) -> String {
@@ -646,6 +528,110 @@ mod platform {
             CoTaskMemFree(Some(path.as_ptr().cast()));
             Ok(PathBuf::from(path_string))
         }
+    }
+
+    fn install_login_startup(daemon: &std::path::Path) -> Result<()> {
+        let command = command_line_quote_arg(&daemon.display().to_string());
+        let subkey = wide_null(RUN_KEY);
+        let name = wide_null(APP_NAME);
+        let data = wide_null(&command);
+        let byte_len = (data.len() * std::mem::size_of::<u16>()) as u32;
+
+        unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(name.as_ptr()),
+                REG_SZ.0,
+                Some(data.as_ptr().cast()),
+                byte_len,
+            )
+            .ok()
+            .context("failed to install pester login startup entry")?;
+        }
+        Ok(())
+    }
+
+    fn remove_login_startup() -> Result<()> {
+        use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+
+        let subkey = wide_null(RUN_KEY);
+        let name = wide_null(APP_NAME);
+        let status = unsafe {
+            RegDeleteKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(name.as_ptr()),
+            )
+        };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        status
+            .ok()
+            .context("failed to remove pester login startup entry")
+    }
+
+    fn login_startup_status() -> Result<Option<String>> {
+        use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+
+        let subkey = wide_null(RUN_KEY);
+        let name = wide_null(APP_NAME);
+        let mut value_type = REG_VALUE_TYPE::default();
+        let mut byte_len = 0u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(name.as_ptr()),
+                RRF_RT_REG_SZ,
+                Some(&mut value_type),
+                None,
+                Some(&mut byte_len),
+            )
+        };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(None);
+        }
+        status
+            .ok()
+            .context("failed to read pester login startup entry")?;
+        if value_type != REG_SZ {
+            return Ok(None);
+        }
+
+        let mut buffer = vec![0u16; (byte_len as usize + 1) / std::mem::size_of::<u16>()];
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(subkey.as_ptr()),
+                PCWSTR(name.as_ptr()),
+                RRF_RT_REG_SZ,
+                Some(&mut value_type),
+                Some(buffer.as_mut_ptr().cast()),
+                Some(&mut byte_len),
+            )
+        };
+        status
+            .ok()
+            .context("failed to read pester login startup entry")?;
+        let len = buffer
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(buffer.len());
+        Ok(Some(String::from_utf16_lossy(&buffer[..len])))
+    }
+
+    fn run_value_status(value: std::result::Result<&Option<String>, &anyhow::Error>) -> String {
+        match value {
+            Ok(Some(value)) => format!("installed ({value})"),
+            Ok(None) => "missing".to_string(),
+            Err(_) => "unknown".to_string(),
+        }
+    }
+
+    fn wide_null(value: impl AsRef<OsStr>) -> Vec<u16> {
+        value.as_ref().encode_wide().chain(iter::once(0)).collect()
     }
 
     unsafe fn set_app_user_model_id(property_store: &IPropertyStore) -> Result<()> {
