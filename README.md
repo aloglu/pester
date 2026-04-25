@@ -2,9 +2,6 @@
 
 pester is a reminder daemon that keeps reminding you until you mark things done.
 
-Windows support ended with `v0.1.8`. Current development and releases on `main`
-target Linux and macOS.
-
 It sends native desktop notifications at configured daily times and keeps
 sending them at a repeat interval until you explicitly mark the reminder done
 for the current day.
@@ -24,21 +21,11 @@ Linux and macOS:
 curl -fsSL https://raw.githubusercontent.com/aloglu/pester/main/install.sh | sh
 ```
 
-Windows PowerShell (`v0.1.8`, last supported Windows release):
-
-```powershell
-irm https://raw.githubusercontent.com/aloglu/pester/v0.1.8/install.ps1 | iex
-```
-
 The installers detect the operating system and CPU architecture, download the
 matching GitHub Release artifact, verify its checksum, install pester for the
 current user, install the background service, and start it.
 
-Windows remains available through the pinned `v0.1.8` installer above, but it
-is no longer actively maintained or tested.
-
-pester does not require Rust, Python, Node.js, Java, Docker, or an external
-notification command at runtime.
+For Windows, see the [Windows](#windows) section below.
 
 ## Examples
 
@@ -192,8 +179,8 @@ pester system daemon
 ```
 
 Reminder ids may contain ASCII letters, numbers, hyphens, and underscores.
-Reserved command words such as `all`, `done`, `enable`, and `disable` cannot be
-used as reminder ids.
+Names used by pester commands and subcommands are reserved and cannot be used
+as reminder ids.
 
 Times are local 24-hour wall-clock times in `HH:MM` format. By default, a
 reminder can notify from its scheduled time until local midnight. `--until`
@@ -248,15 +235,14 @@ app identity for notification permissions.
 
 ### Windows
 
-Windows support ended with `v0.1.8`.
-
-The last supported installer command is:
-
-```powershell
-irm https://raw.githubusercontent.com/aloglu/pester/v0.1.8/install.ps1 | iex
-```
-
-`main` and releases after `v0.1.8` are not intended for Windows.
+> [!WARNING]
+> As of April 25, 2026, Windows support has ended with `v0.1.8`.
+> `main` and releases after `v0.1.8` are not intended for Windows.
+> The last supported installer command is:
+>
+> ```powershell
+> irm https://raw.githubusercontent.com/aloglu/pester/v0.1.8/install.ps1 | iex
+> ```
 
 The `v0.1.8` Windows build uses Windows Toast notifications.
 
