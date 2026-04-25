@@ -87,8 +87,6 @@ fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
 
 #[cfg(target_os = "windows")]
 fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
-    use std::os::windows::process::CommandExt;
-
     let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") else {
         return Ok(Vec::new());
     };
@@ -104,6 +102,16 @@ fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
     if daemon.exists() {
         targets.push(daemon);
     }
+
+    schedule_windows_self_delete(&targets)
+        .with_context(|| format!("failed to schedule removal of {}", current.display()))?;
+    Ok(targets)
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_windows_self_delete(targets: &[PathBuf]) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
     let quoted_targets = targets
         .iter()
         .map(|path| format!("'{}'", path.display().to_string().replace('\'', "''")))
@@ -132,8 +140,8 @@ fn delete_installed_binaries(current: &Path) -> Result<Vec<PathBuf>> {
         .args(["-NoProfile", "-Command", &script])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .with_context(|| format!("failed to schedule removal of {}", current.display()))?;
-    Ok(targets)
+        .context("failed to start Windows self-delete helper")?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

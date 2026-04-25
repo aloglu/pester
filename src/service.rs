@@ -298,7 +298,7 @@ mod platform {
     use std::process::{Command, Stdio};
 
     use anyhow::{bail, Context, Result};
-    use windows::core::{w, Interface, HSTRING, PCWSTR, PROPVARIANT};
+    use windows::core::{Interface, HSTRING, PCWSTR, PROPVARIANT};
     use windows::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
@@ -325,21 +325,23 @@ mod platform {
     const DAEMON_STOP_WAIT_MS: u32 = 5_000;
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
+    // Public platform entry points.
+
     pub fn install(_paths: &Paths) -> Result<()> {
         let daemon = daemon_executable()?;
-        create_start_menu_shortcut(&daemon)?;
+        install_notification_identity(&daemon)?;
         if let Err(error) = install_login_startup(&daemon) {
-            let _ = remove_start_menu_shortcut();
+            let _ = remove_notification_identity();
             return Err(error);
         }
         if let Err(error) = stop_running_daemon().context("failed to stop existing pester daemon") {
             let _ = remove_login_startup();
-            let _ = remove_start_menu_shortcut();
+            let _ = remove_notification_identity();
             return Err(error);
         }
         if let Err(error) = start_daemon(&daemon) {
             let _ = remove_login_startup();
-            let _ = remove_start_menu_shortcut();
+            let _ = remove_notification_identity();
             return Err(error);
         }
         term::ok("Installed and started Windows login startup.");
@@ -349,12 +351,12 @@ mod platform {
     pub fn uninstall(_paths: &Paths) -> Result<()> {
         let _ = remove_login_startup();
         stop_running_daemon().context("failed to stop pester daemon")?;
-        let _ = remove_start_menu_shortcut();
+        let _ = remove_notification_identity();
         Ok(())
     }
 
     pub fn diagnostics(_paths: &Paths) -> Vec<String> {
-        let start_menu_shortcut = start_menu_shortcut_path();
+        let notification_identity = notification_identity_path();
         let login_startup = login_startup_status();
         let expected_startup = daemon_executable()
             .ok()
@@ -370,7 +372,7 @@ mod platform {
             format!("service: {status}"),
             format!(
                 "notification shortcut: {}",
-                shortcut_status(start_menu_shortcut.as_ref())
+                path_status(notification_identity.as_ref())
             ),
             format!(
                 "login startup: {}",
@@ -378,6 +380,8 @@ mod platform {
             ),
         ]
     }
+
+    // Daemon executable and process lifecycle.
 
     fn daemon_executable() -> Result<PathBuf> {
         let exe = std::env::current_exe()?;
@@ -413,12 +417,16 @@ mod platform {
     }
 
     fn signal_daemon_stop() -> Result<bool> {
-        let handle =
-            match unsafe { OpenEventW(EVENT_MODIFY_STATE, false, w!("Local\\pester-daemon-stop")) }
-            {
-                Ok(handle) => handle,
-                Err(_) => return Ok(false),
-            };
+        let handle = match unsafe {
+            OpenEventW(
+                EVENT_MODIFY_STATE,
+                false,
+                crate::windows_ipc::daemon_stop_event_name(),
+            )
+        } {
+            Ok(handle) => handle,
+            Err(_) => return Ok(false),
+        };
 
         let result = unsafe { SetEvent(handle) }.context("could not signal pester daemon to stop");
         unsafe {
@@ -432,7 +440,7 @@ mod platform {
             OpenMutexW(
                 SYNCHRONIZATION_SYNCHRONIZE | MUTEX_MODIFY_STATE,
                 false,
-                w!("Local\\pester-daemon"),
+                crate::windows_ipc::daemon_mutex_name(),
             )
         } {
             Ok(handle) => handle,
@@ -456,18 +464,17 @@ mod platform {
         result
     }
 
-    fn create_start_menu_shortcut(exe: &std::path::Path) -> Result<()> {
+    // Notification identity. Windows toast notifications need a Start Menu
+    // shortcut with the AppUserModelID used by notify.rs.
+
+    fn install_notification_identity(exe: &std::path::Path) -> Result<()> {
         create_shortcut(
-            &start_menu_shortcut_path()?,
+            &notification_identity_path()?,
             exe,
             "",
             "pester reminder daemon",
             SW_SHOWNORMAL,
         )
-    }
-
-    fn command_line_quote_arg(value: &str) -> String {
-        format!("\"{}\"", value.replace('"', "\\\""))
     }
 
     fn create_shortcut(
@@ -517,8 +524,53 @@ mod platform {
         Ok(())
     }
 
-    fn remove_start_menu_shortcut() -> Result<()> {
-        let shortcut_path = start_menu_shortcut_path()?;
+    fn known_folder_path(folder_id: &windows::core::GUID) -> Result<PathBuf> {
+        unsafe {
+            let path = SHGetKnownFolderPath(folder_id, Default::default(), None)
+                .context("could not locate Windows Start Menu folder")?;
+            let path_string = path
+                .to_string()
+                .context("Start Menu path is not valid UTF-16")?;
+            CoTaskMemFree(Some(path.as_ptr().cast()));
+            Ok(PathBuf::from(path_string))
+        }
+    }
+
+    unsafe fn set_app_user_model_id(property_store: &IPropertyStore) -> Result<()> {
+        const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
+            fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+            pid: 5,
+        };
+
+        let value = PROPVARIANT::from(APP_ID);
+        property_store
+            .SetValue(&PKEY_APP_USER_MODEL_ID, &value)
+            .context("could not set pester AppUserModelID")
+    }
+
+    struct ComApartment;
+
+    impl ComApartment {
+        fn new() -> Result<Self> {
+            unsafe {
+                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                    .ok()
+                    .context("could not initialize COM apartment")?;
+            }
+            Ok(Self)
+        }
+    }
+
+    impl Drop for ComApartment {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
+
+    fn remove_notification_identity() -> Result<()> {
+        let shortcut_path = notification_identity_path()?;
         remove_shortcut(&shortcut_path)
     }
 
@@ -530,7 +582,7 @@ mod platform {
         Ok(())
     }
 
-    fn start_menu_shortcut_path() -> Result<PathBuf> {
+    fn notification_identity_path() -> Result<PathBuf> {
         let start_menu = known_folder_path(&FOLDERID_StartMenu)?;
         Ok(start_menu
             .join("Programs")
@@ -538,7 +590,7 @@ mod platform {
             .join(format!("{APP_NAME}.lnk")))
     }
 
-    fn shortcut_status(path: std::result::Result<&PathBuf, &anyhow::Error>) -> String {
+    fn path_status(path: std::result::Result<&PathBuf, &anyhow::Error>) -> String {
         match path {
             Ok(path) if path.exists() => format!("installed ({})", path.display()),
             Ok(path) => format!("missing ({})", path.display()),
@@ -546,16 +598,10 @@ mod platform {
         }
     }
 
-    fn known_folder_path(folder_id: &windows::core::GUID) -> Result<PathBuf> {
-        unsafe {
-            let path = SHGetKnownFolderPath(folder_id, Default::default(), None)
-                .context("could not locate Windows Start Menu folder")?;
-            let path_string = path
-                .to_string()
-                .context("Start Menu path is not valid UTF-16")?;
-            CoTaskMemFree(Some(path.as_ptr().cast()));
-            Ok(PathBuf::from(path_string))
-        }
+    // Login startup registry entry.
+
+    fn command_line_quote_arg(value: &str) -> String {
+        format!("\"{}\"", value.replace('"', "\\\""))
     }
 
     fn install_login_startup(daemon: &std::path::Path) -> Result<()> {
@@ -660,39 +706,6 @@ mod platform {
 
     fn wide_null(value: impl AsRef<OsStr>) -> Vec<u16> {
         value.as_ref().encode_wide().chain(iter::once(0)).collect()
-    }
-
-    unsafe fn set_app_user_model_id(property_store: &IPropertyStore) -> Result<()> {
-        const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
-            fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
-            pid: 5,
-        };
-
-        let value = PROPVARIANT::from(APP_ID);
-        property_store
-            .SetValue(&PKEY_APP_USER_MODEL_ID, &value)
-            .context("could not set pester AppUserModelID")
-    }
-
-    struct ComApartment;
-
-    impl ComApartment {
-        fn new() -> Result<Self> {
-            unsafe {
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                    .ok()
-                    .context("could not initialize COM apartment")?;
-            }
-            Ok(Self)
-        }
-    }
-
-    impl Drop for ComApartment {
-        fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
-            }
-        }
     }
 }
 

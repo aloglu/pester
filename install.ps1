@@ -188,6 +188,86 @@ function Add-UserPathEntry {
     }
 }
 
+function Initialize-PesterNativeMethods {
+    if ("PesterNativeMethods" -as [type]) {
+        return
+    }
+
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class PesterNativeMethods
+{
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr OpenEvent(UInt32 dwDesiredAccess, bool bInheritHandle, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr OpenMutex(UInt32 dwDesiredAccess, bool bInheritHandle, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetEvent(IntPtr hEvent);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern UInt32 WaitForSingleObject(IntPtr hHandle, UInt32 dwMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool ReleaseMutex(IntPtr hMutex);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+}
+"@
+}
+
+function Stop-PesterDaemonGracefully {
+    try {
+        Initialize-PesterNativeMethods
+
+        $EventModifyState = [uint32] 0x0002
+        $MutexModifyState = [uint32] 0x0001
+        $SynchronizationSynchronize = [uint32] 0x00100000
+        $WaitObject0 = [uint32] 0x00000000
+        $WaitAbandoned = [uint32] 0x00000080
+        $WaitTimeout = [uint32] 0x00000102
+
+        $Event = [PesterNativeMethods]::OpenEvent($EventModifyState, $false, "Local\pester-daemon-stop")
+        if ($Event -eq [IntPtr]::Zero) {
+            return $false
+        }
+
+        try {
+            if (-not [PesterNativeMethods]::SetEvent($Event)) {
+                return $false
+            }
+        } finally {
+            [void] [PesterNativeMethods]::CloseHandle($Event)
+        }
+
+        $MutexAccess = [uint32] ($SynchronizationSynchronize -bor $MutexModifyState)
+        $Mutex = [PesterNativeMethods]::OpenMutex($MutexAccess, $false, "Local\pester-daemon")
+        if ($Mutex -eq [IntPtr]::Zero) {
+            return $true
+        }
+
+        try {
+            $WaitResult = [PesterNativeMethods]::WaitForSingleObject($Mutex, 3000)
+            if ($WaitResult -eq $WaitObject0 -or $WaitResult -eq $WaitAbandoned) {
+                [void] [PesterNativeMethods]::ReleaseMutex($Mutex)
+                return $true
+            }
+            if ($WaitResult -eq $WaitTimeout) {
+                return $false
+            }
+            return $false
+        } finally {
+            [void] [PesterNativeMethods]::CloseHandle($Mutex)
+        }
+    } catch {
+        return $false
+    }
+}
+
 function Stop-InstalledPester {
     param(
         [Parameter(Mandatory = $true)]
@@ -204,6 +284,8 @@ function Stop-InstalledPester {
     if ($Targets.Count -eq 0) {
         return
     }
+
+    [void] (Stop-PesterDaemonGracefully)
 
     $ProcessNames = $Targets |
         ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_) } |

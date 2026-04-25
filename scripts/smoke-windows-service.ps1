@@ -42,7 +42,23 @@ function Invoke-PesterCommand {
 
 Invoke-PesterCommand -Arguments @("system", "install")
 try {
-    Invoke-PesterCommand -Arguments @("system", "status")
+    $StatusOutput = & $ResolvedExe system status --verbose 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        foreach ($Line in $StatusOutput) {
+            Write-Output $Line
+        }
+        throw "pester system status --verbose failed with exit code $LASTEXITCODE"
+    }
+
+    $StatusText = [string]::Join("`n", $StatusOutput)
+    if ($StatusText -notmatch "notification shortcut: installed") {
+        Write-Output $StatusText
+        throw "Windows notification identity shortcut was not installed."
+    }
+    if ($StatusText -notmatch "AppUserModelID: com\.aloglu\.pester") {
+        Write-Output $StatusText
+        throw "Windows notification AppUserModelID was not registered in diagnostics."
+    }
 } finally {
     Invoke-PesterCommand -Arguments @("system", "uninstall", "--yes")
 }
