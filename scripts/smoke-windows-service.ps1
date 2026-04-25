@@ -44,5 +44,5 @@ Invoke-PesterCommand -Arguments @("system", "install")
 try {
     Invoke-PesterCommand -Arguments @("system", "status")
 } finally {
-    Invoke-PesterCommand -Arguments @("system", "uninstall")
+    Invoke-PesterCommand -Arguments @("system", "uninstall", "--yes")
 }

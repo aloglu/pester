@@ -84,7 +84,7 @@ fn main() -> Result<()> {
         Command::System { command } => match command {
             SystemCommand::Status(args) => system_status(&store, args.verbose),
             SystemCommand::Install => service::install(&store.paths),
-            SystemCommand::Uninstall(args) => uninstall(&store, args.delete_data),
+            SystemCommand::Uninstall(args) => uninstall(&store, args.delete_data, args.yes),
             SystemCommand::Daemon => daemon::run(store),
         },
     }
@@ -628,12 +628,14 @@ fn reset_done_phrase(store: &Store, id: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn uninstall(store: &Store, delete_data: bool) -> Result<()> {
-    if delete_data {
+fn uninstall(store: &Store, delete_data: bool, yes: bool) -> Result<()> {
+    if delete_data && !yes {
         confirm_delete("Uninstall pester and permanently delete all reminders and state?")?;
-    } else if !confirm_yes_no(
-        "Uninstall pester and stop background reminders? Your reminders will be kept.",
-    )? {
+    } else if !yes
+        && !confirm_yes_no(
+            "Uninstall pester and stop background reminders? Your reminders will be kept.",
+        )?
+    {
         term::warn("Cancelled.");
         return Ok(());
     }

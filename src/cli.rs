@@ -150,6 +150,8 @@ pub enum SystemCommand {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
+    #[arg(long, help = "Skip the uninstall confirmation prompt")]
+    pub yes: bool,
     #[arg(long, help = "Permanently delete reminders and state")]
     pub delete_data: bool,
 }
@@ -256,8 +258,23 @@ mod tests {
         assert!(Cli::try_parse_from(["pester", "system", "status", "--verbose"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "install"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "uninstall"]).is_ok());
+        assert!(Cli::try_parse_from(["pester", "system", "uninstall", "--yes"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "uninstall", "--delete-data"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "daemon"]).is_ok());
+    }
+
+    #[test]
+    fn system_uninstall_yes_flag_parses() {
+        let cli = Cli::parse_from(["pester", "system", "uninstall", "--yes"]);
+
+        let Command::System {
+            command: SystemCommand::Uninstall(args),
+        } = cli.command
+        else {
+            panic!("expected system uninstall command");
+        };
+        assert!(args.yes);
+        assert!(!args.delete_data);
     }
 
     #[test]
