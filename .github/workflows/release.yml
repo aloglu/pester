@@ -18,7 +18,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu,aarch64-apple-darwin
+          targets: aarch64-apple-darwin
           components: rustfmt,clippy
 
       - name: Format
@@ -32,9 +32,6 @@ jobs:
 
       - name: Check Linux
         run: cargo check --bins
-
-      - name: Check Windows target
-        run: cargo check --target x86_64-pc-windows-gnu --bins
 
       - name: Check macOS target
         run: cargo check --target aarch64-apple-darwin --bins
@@ -56,53 +53,10 @@ jobs:
           fi
           grep "Intel macOS is not supported yet" /tmp/pester-install.out
 
-  checks-windows:
-    name: checks windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Parse install.ps1
-        shell: pwsh
-        run: |
-          [scriptblock]::Create((Get-Content -Raw install.ps1)) | Out-Null
-          [scriptblock]::Create((Get-Content -Raw scripts/smoke-windows-service.ps1)) | Out-Null
-
-      - name: Installer platform selection
-        shell: pwsh
-        run: |
-          $env:PESTER_INSTALL_DRY_RUN = "1"
-          $env:PESTER_INSTALL_OS = "Windows"
-
-          $env:PESTER_INSTALL_ARCH = "X64"
-          $X64 = & ./install.ps1
-          if ($X64 -ne "pester-windows-x86_64.zip") {
-              throw "Expected pester-windows-x86_64.zip, got $X64"
-          }
-
-          $env:PESTER_INSTALL_ARCH = "Arm64"
-          $Arm64 = & ./install.ps1
-          if ($Arm64 -ne "pester-windows-aarch64.zip") {
-              throw "Expected pester-windows-aarch64.zip, got $Arm64"
-          }
-
-      - name: Check Windows MSVC
-        run: cargo check --bins
-
-      - name: Smoke Windows service lifecycle
-        shell: pwsh
-        run: |
-          cargo build --release --bins
-          ./scripts/smoke-windows-service.ps1 -Exe "target/release/pester.exe"
-
   build:
     name: build ${{ matrix.target }}
     needs:
       - checks
-      - checks-windows
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -120,14 +74,6 @@ jobs:
             target: aarch64-apple-darwin
             archive: tar.gz
             artifact: pester-macos-aarch64.tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-            artifact: pester-windows-x86_64.zip
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            archive: zip
-            artifact: pester-windows-aarch64.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -160,27 +106,6 @@ jobs:
         run: |
           chmod +x scripts/package-macos.sh
           scripts/package-macos.sh "${{ matrix.target }}" "target/${{ matrix.target }}/release/pester" "${{ steps.version.outputs.version }}"
-
-      - name: Package Windows
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/pester.exe" "dist/pester.exe"
-          Copy-Item "target/${{ matrix.target }}/release/pesterd.exe" "dist/pesterd.exe"
-          Compress-Archive -Path "dist/pester.exe", "dist/pesterd.exe" -DestinationPath "${{ matrix.artifact }}"
-
-      - name: Verify Windows package
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $InspectDir = "inspect-${{ matrix.target }}"
-          Expand-Archive -Path "${{ matrix.artifact }}" -DestinationPath $InspectDir
-          foreach ($Expected in @("pester.exe", "pesterd.exe")) {
-              if (-not (Test-Path -LiteralPath (Join-Path $InspectDir $Expected))) {
-                  throw "${{ matrix.artifact }} is missing $Expected"
-              }
-          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

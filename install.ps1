@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "aloglu/pester"
+$LastWindowsVersion = "v0.1.8"
 $BinName = "pester.exe"
 $DaemonBinName = "pesterd.exe"
 $Step = 0
@@ -379,7 +380,7 @@ if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
     throw "LOCALAPPDATA is not set."
 }
 
-$BaseUrl = "https://github.com/$Repo/releases/latest/download"
+$BaseUrl = "https://github.com/$Repo/releases/download/$LastWindowsVersion"
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\pester"
 $InstalledExe = Join-Path $InstallDir $BinName
@@ -390,6 +391,7 @@ New-Item -ItemType Directory -Path $TempDir | Out-Null
 try {
     Write-Heading
     Write-Detail "Target: Windows $TargetArch"
+    Write-Detail "Windows support ended with $LastWindowsVersion; installing the last supported Windows release."
     Write-Detail "Artifact: $Artifact"
 
     Write-Step "Downloading release files"

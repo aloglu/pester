@@ -1,6 +1,9 @@
 # pester
 
-pester is a cross-platform reminder daemon that keeps reminding you until you mark things done.
+pester is a reminder daemon that keeps reminding you until you mark things done.
+
+Windows support ended with `v0.1.8`. Current development and releases on `main`
+target Linux and macOS.
 
 It sends native desktop notifications at configured daily times and keeps
 sending them at a repeat interval until you explicitly mark the reminder done
@@ -21,15 +24,18 @@ Linux and macOS:
 curl -fsSL https://raw.githubusercontent.com/aloglu/pester/main/install.sh | sh
 ```
 
-Windows PowerShell:
+Windows PowerShell (`v0.1.8`, last supported Windows release):
 
 ```powershell
-irm https://raw.githubusercontent.com/aloglu/pester/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/aloglu/pester/v0.1.8/install.ps1 | iex
 ```
 
-The installer detects the operating system and CPU architecture, downloads the
-matching GitHub Release artifact, verifies its checksum, installs pester for the
-current user, installs the background service, and starts it.
+The installers detect the operating system and CPU architecture, download the
+matching GitHub Release artifact, verify its checksum, install pester for the
+current user, install the background service, and start it.
+
+Windows remains available through the pinned `v0.1.8` installer above, but it
+is no longer actively maintained or tested.
 
 pester does not require Rust, Python, Node.js, Java, Docker, or an external
 notification command at runtime.
@@ -242,7 +248,17 @@ app identity for notification permissions.
 
 ### Windows
 
-pester uses Windows Toast notifications.
+Windows support ended with `v0.1.8`.
+
+The last supported installer command is:
+
+```powershell
+irm https://raw.githubusercontent.com/aloglu/pester/v0.1.8/install.ps1 | iex
+```
+
+`main` and releases after `v0.1.8` are not intended for Windows.
+
+The `v0.1.8` Windows build uses Windows Toast notifications.
 
 The installer installs:
 
@@ -296,8 +312,9 @@ Freedesktop notification service are running.
 If notifications are unavailable on macOS, check System Settings -> Notifications
 and look for pester.
 
-If notifications are unavailable on Windows, check Focus / Do Not Disturb,
-notification settings, and whether the pester Start Menu shortcut exists.
+If notifications are unavailable on Windows `v0.1.8`, check Focus / Do Not
+Disturb, notification settings, and whether the pester Start Menu shortcut
+exists.
 
 If `pester` is not found after installation, ensure `~/.local/bin` is in `PATH`
 on Linux/macOS. The background service uses absolute paths and does not depend
@@ -327,13 +344,18 @@ GitHub Releases provide prebuilt artifacts for:
 pester-linux-x86_64.tar.gz
 pester-linux-aarch64.tar.gz
 pester-macos-aarch64.tar.gz
-pester-windows-x86_64.zip
-pester-windows-aarch64.zip
 checksums.txt
 ```
 
 Users normally do not download these artifacts manually. The install scripts
 select the correct artifact automatically.
+
+Windows artifacts remain available on the `v0.1.8` release:
+
+```text
+pester-windows-x86_64.zip
+pester-windows-aarch64.zip
+```
 
 ## License
 
