@@ -13,41 +13,38 @@ function Invoke-PesterCommand {
         [string[]] $Arguments
     )
 
-    $ArgumentPayload = [string]::Join("`n", $Arguments)
-
-    $Job = Start-Job -ScriptBlock {
-        param(
-            [string] $Exe,
-            [string] $ArgumentPayload
-        )
-
-        $ErrorActionPreference = "Stop"
-        if ([string]::IsNullOrEmpty($ArgumentPayload)) {
-            $Arguments = @()
-        } else {
-            $Arguments = $ArgumentPayload -split "`n"
-        }
-
-        $Output = & $Exe @Arguments 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            foreach ($Line in $Output) {
-                Write-Output $Line
-            }
-            throw "pester $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
-        }
-        foreach ($Line in $Output) {
-            Write-Output $Line
-        }
-    } -ArgumentList $ResolvedExe, $ArgumentPayload
+    $Process = [System.Diagnostics.Process]::new()
+    $Process.StartInfo.FileName = $ResolvedExe
+    foreach ($Argument in $Arguments) {
+        $Process.StartInfo.ArgumentList.Add($Argument)
+    }
+    $Process.StartInfo.UseShellExecute = $false
+    $Process.StartInfo.RedirectStandardOutput = $true
+    $Process.StartInfo.RedirectStandardError = $true
+    $Process.StartInfo.CreateNoWindow = $true
 
     try {
-        if (-not (Wait-Job -Job $Job -Timeout $TimeoutSeconds)) {
-            Stop-Job -Job $Job
+        if (-not $Process.Start()) {
+            throw "Could not start pester $($Arguments -join ' ')"
+        }
+        if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+            $Process.Kill()
             throw "Timed out running pester $($Arguments -join ' ')"
         }
-        Receive-Job -Job $Job
+
+        $Output = $Process.StandardOutput.ReadToEnd()
+        $ErrorOutput = $Process.StandardError.ReadToEnd()
+        if (-not [string]::IsNullOrWhiteSpace($Output)) {
+            Write-Output $Output.TrimEnd()
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ErrorOutput)) {
+            Write-Output $ErrorOutput.TrimEnd()
+        }
+        if ($Process.ExitCode -ne 0) {
+            throw "pester $($Arguments -join ' ') failed with exit code $($Process.ExitCode)"
+        }
     } finally {
-        Remove-Job -Job $Job -Force
+        $Process.Dispose()
     }
 }
 

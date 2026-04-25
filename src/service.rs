@@ -298,12 +298,8 @@ mod platform {
     use std::process::{Command, Stdio};
 
     use anyhow::{bail, Context, Result};
-    use windows::core::{w, Interface, HSTRING, PCWSTR, PROPVARIANT};
+    use windows::core::{w, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT};
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-    };
     use windows::Win32::System::Registry::{
         RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
         REG_VALUE_TYPE, RRF_RT_REG_SZ,
@@ -312,13 +308,8 @@ mod platform {
         OpenEventW, OpenMutexW, ReleaseMutex, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
         MUTEX_MODIFY_STATE, SYNCHRONIZATION_SYNCHRONIZE,
     };
-    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
-    use windows::Win32::UI::Shell::{
-        FOLDERID_StartMenu, IShellLinkW, SHGetKnownFolderPath, ShellLink,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{SHOW_WINDOW_CMD, SW_SHOWNORMAL};
 
-    use crate::app::{APP_ID, APP_NAME};
+    use crate::app::APP_NAME;
     use crate::paths::Paths;
     use crate::term;
 
@@ -327,19 +318,13 @@ mod platform {
 
     pub fn install(_paths: &Paths) -> Result<()> {
         let daemon = daemon_executable()?;
-        create_start_menu_shortcut(&daemon)?;
-        if let Err(error) = install_login_startup(&daemon) {
-            let _ = remove_start_menu_shortcut();
-            return Err(error);
-        }
+        install_login_startup(&daemon)?;
         if let Err(error) = stop_running_daemon().context("failed to stop existing pester daemon") {
             let _ = remove_login_startup();
-            let _ = remove_start_menu_shortcut();
             return Err(error);
         }
         if let Err(error) = start_daemon(&daemon) {
             let _ = remove_login_startup();
-            let _ = remove_start_menu_shortcut();
             return Err(error);
         }
         term::ok("Installed and started Windows login startup.");
@@ -349,12 +334,10 @@ mod platform {
     pub fn uninstall(_paths: &Paths) -> Result<()> {
         let _ = remove_login_startup();
         stop_running_daemon().context("failed to stop pester daemon")?;
-        let _ = remove_start_menu_shortcut();
         Ok(())
     }
 
     pub fn diagnostics(_paths: &Paths) -> Vec<String> {
-        let start_menu_shortcut = start_menu_shortcut_path();
         let login_startup = login_startup_status();
         let expected_startup = daemon_executable()
             .ok()
@@ -368,10 +351,6 @@ mod platform {
         vec![
             "service manager: Windows per-user Run key".to_string(),
             format!("service: {status}"),
-            format!(
-                "start menu shortcut: {}",
-                shortcut_status(start_menu_shortcut.as_ref())
-            ),
             format!(
                 "login startup: {}",
                 run_value_status(login_startup.as_ref())
@@ -456,106 +435,8 @@ mod platform {
         result
     }
 
-    fn create_start_menu_shortcut(exe: &std::path::Path) -> Result<()> {
-        create_shortcut(
-            &start_menu_shortcut_path()?,
-            exe,
-            "",
-            "pester reminder daemon",
-            SW_SHOWNORMAL,
-        )
-    }
-
     fn command_line_quote_arg(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\\\""))
-    }
-
-    fn create_shortcut(
-        shortcut_path: &std::path::Path,
-        exe: &std::path::Path,
-        arguments: &str,
-        description: &str,
-        show_command: SHOW_WINDOW_CMD,
-    ) -> Result<()> {
-        let _com = ComApartment::new()?;
-        if let Some(parent) = shortcut_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        unsafe {
-            let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-                .context("could not create Windows ShellLink COM object")?;
-            shell_link
-                .SetPath(&HSTRING::from(exe.display().to_string()))
-                .context("could not set pester shortcut path")?;
-            shell_link
-                .SetArguments(&HSTRING::from(arguments))
-                .context("could not set pester shortcut arguments")?;
-            shell_link
-                .SetDescription(&HSTRING::from(description))
-                .context("could not set pester shortcut description")?;
-            shell_link
-                .SetShowCmd(show_command)
-                .context("could not set pester shortcut show command")?;
-
-            let property_store: IPropertyStore = shell_link
-                .cast()
-                .context("could not access pester shortcut property store")?;
-            set_app_user_model_id(&property_store)?;
-            property_store
-                .Commit()
-                .context("could not commit pester shortcut properties")?;
-
-            let persist_file: IPersistFile = shell_link
-                .cast()
-                .context("could not access pester shortcut persistence")?;
-            persist_file
-                .Save(&HSTRING::from(shortcut_path.display().to_string()), true)
-                .context("could not save pester shortcut")?;
-        }
-
-        Ok(())
-    }
-
-    fn remove_start_menu_shortcut() -> Result<()> {
-        let shortcut_path = start_menu_shortcut_path()?;
-        remove_shortcut(&shortcut_path)
-    }
-
-    fn remove_shortcut(shortcut_path: &std::path::Path) -> Result<()> {
-        if shortcut_path.exists() {
-            std::fs::remove_file(shortcut_path)
-                .with_context(|| format!("failed to remove {}", shortcut_path.display()))?;
-        }
-        Ok(())
-    }
-
-    fn start_menu_shortcut_path() -> Result<PathBuf> {
-        let start_menu = known_folder_path(&FOLDERID_StartMenu)?;
-        Ok(start_menu
-            .join("Programs")
-            .join(APP_NAME)
-            .join(format!("{APP_NAME}.lnk")))
-    }
-
-    fn shortcut_status(path: std::result::Result<&PathBuf, &anyhow::Error>) -> String {
-        match path {
-            Ok(path) if path.exists() => format!("installed ({})", path.display()),
-            Ok(path) => format!("missing ({})", path.display()),
-            Err(_) => "unknown".to_string(),
-        }
-    }
-
-    fn known_folder_path(folder_id: &windows::core::GUID) -> Result<PathBuf> {
-        unsafe {
-            let path = SHGetKnownFolderPath(folder_id, Default::default(), None)
-                .context("could not locate Windows Start Menu folder")?;
-            let path_string = path
-                .to_string()
-                .context("Start Menu path is not valid UTF-16")?;
-            CoTaskMemFree(Some(path.as_ptr().cast()));
-            Ok(PathBuf::from(path_string))
-        }
     }
 
     fn install_login_startup(daemon: &std::path::Path) -> Result<()> {
@@ -660,39 +541,6 @@ mod platform {
 
     fn wide_null(value: impl AsRef<OsStr>) -> Vec<u16> {
         value.as_ref().encode_wide().chain(iter::once(0)).collect()
-    }
-
-    unsafe fn set_app_user_model_id(property_store: &IPropertyStore) -> Result<()> {
-        const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
-            fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
-            pid: 5,
-        };
-
-        let value = PROPVARIANT::from(APP_ID);
-        property_store
-            .SetValue(&PKEY_APP_USER_MODEL_ID, &value)
-            .context("could not set pester AppUserModelID")
-    }
-
-    struct ComApartment;
-
-    impl ComApartment {
-        fn new() -> Result<Self> {
-            unsafe {
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-                    .ok()
-                    .context("could not initialize COM apartment")?;
-            }
-            Ok(Self)
-        }
-    }
-
-    impl Drop for ComApartment {
-        fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
-            }
-        }
     }
 }
 
