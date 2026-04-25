@@ -352,15 +352,9 @@ try {
     Write-Ok "Installed to $InstallDir"
 
     Write-Step "Starting background service"
-    $InstallOutput = & $InstalledExe system install 2>&1
+    & $InstalledExe system install
     if ($LASTEXITCODE -ne 0) {
-        foreach ($Line in $InstallOutput) {
-            Write-Detail ($Line.ToString())
-        }
         throw "pester system install failed with exit code $LASTEXITCODE"
-    }
-    foreach ($Line in $InstallOutput) {
-        Write-Detail ($Line.ToString())
     }
     Write-Ok "Background service installed and started"
 
