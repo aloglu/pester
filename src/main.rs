@@ -6,7 +6,7 @@ use pester::confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase,
 use pester::models::{Reminder, State};
 use pester::schedule::{parse_repeat_interval, parse_time, parse_window_duration};
 use pester::store::Store;
-use pester::{daemon, notify, service, term};
+use pester::{daemon, notify, service, term, version};
 
 const DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT: u64 = 12;
 
@@ -15,10 +15,14 @@ fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let cli = Cli::parse();
+    let command = Cli::parse().command;
+    if let Command::Version = command {
+        return show_version();
+    }
+
     let store = Store::new()?;
 
-    match cli.command {
+    match command {
         Command::Add {
             id,
             time,
@@ -87,6 +91,7 @@ fn main() -> Result<()> {
             SystemCommand::Uninstall(args) => uninstall(&store, args.delete_data, args.yes),
             SystemCommand::Daemon => daemon::run(store),
         },
+        Command::Version => unreachable!(),
     }
 }
 
@@ -676,6 +681,11 @@ fn system_status(store: &Store, verbose: bool) -> Result<()> {
     Ok(())
 }
 
+fn show_version() -> Result<()> {
+    println!("pester {}", version::CURRENT_VERSION);
+    Ok(())
+}
+
 pub(crate) fn validate_id(id: &str) -> Result<()> {
     const RESERVED: &[&str] = &[
         "all",
@@ -697,6 +707,7 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
         "test",
         "undone",
         "uninstall",
+        "version",
     ];
 
     if RESERVED.contains(&id) {

@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "pester")]
 #[command(about = "Reminder notifications that repeat until you mark them done.")]
+#[command(version)]
 #[command(styles = cli_styles())]
 pub struct Cli {
     #[command(subcommand)]
@@ -116,6 +117,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SystemCommand,
     },
+    /// Show version information.
+    Version,
 }
 
 #[derive(Debug, Args)]
@@ -261,6 +264,14 @@ mod tests {
         assert!(Cli::try_parse_from(["pester", "system", "uninstall", "--yes"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "uninstall", "--delete-data"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "system", "daemon"]).is_ok());
+    }
+
+    #[test]
+    fn version_command_parses() {
+        let version = Cli::try_parse_from(["pester", "--version"]).unwrap_err();
+        assert_eq!(version.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(Cli::try_parse_from(["pester", "version"]).is_ok());
+        assert!(Cli::try_parse_from(["pester", "version", "--check"]).is_err());
     }
 
     #[test]

@@ -103,6 +103,12 @@ pester show winddown
 pester system status --verbose
 ```
 
+Show the installed version:
+
+```sh
+pester version
+```
+
 Send a test notification:
 
 ```sh
@@ -172,6 +178,7 @@ pester disable <id> | --all
 pester confirm set [<id>] [--phrase <phrase>]
 pester confirm show [<id>]
 pester confirm reset [<id>]
+pester version
 pester system status [--verbose]
 pester system install
 pester system uninstall [--delete-data]
