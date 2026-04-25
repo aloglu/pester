@@ -33,10 +33,8 @@ mod platform {
         fs::write(&service_file, content)
             .with_context(|| format!("failed to write {}", service_file.display()))?;
         run("systemctl", &["--user", "daemon-reload"])?;
-        run(
-            "systemctl",
-            &["--user", "enable", "--now", "pester.service"],
-        )?;
+        run("systemctl", &["--user", "enable", "pester.service"])?;
+        run("systemctl", &["--user", "restart", "pester.service"])?;
         term::ok("Installed and started user systemd service.");
         Ok(())
     }
@@ -169,6 +167,12 @@ mod platform {
         let launch_agents = home()?.join("Library/LaunchAgents");
         fs::create_dir_all(&launch_agents)?;
         let plist = launch_agents.join("com.aloglu.pester.plist");
+        if plist.exists() {
+            let _ = run(
+                "launchctl",
+                &["unload", "-w", plist.to_str().unwrap_or_default()],
+            );
+        }
         let content = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -189,7 +193,7 @@ mod platform {
 </dict>
 </plist>
 "#,
-            exe.display()
+            xml_escape(&exe.display().to_string())
         );
         fs::write(&plist, content)
             .with_context(|| format!("failed to write {}", plist.display()))?;
@@ -285,6 +289,28 @@ mod platform {
             return Ok(bundled);
         }
         std::env::current_exe().context("could not determine current executable")
+    }
+
+    fn xml_escape(value: &str) -> String {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::xml_escape;
+
+        #[test]
+        fn escapes_plist_string_values() {
+            assert_eq!(
+                xml_escape("/Users/me/A&B/<pester>\"'"),
+                "/Users/me/A&amp;B/&lt;pester&gt;&quot;&apos;"
+            );
+        }
     }
 }
 
