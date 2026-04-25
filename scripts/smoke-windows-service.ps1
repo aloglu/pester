@@ -19,8 +19,8 @@ function Invoke-PesterCommand {
         $Process.StartInfo.ArgumentList.Add($Argument)
     }
     $Process.StartInfo.UseShellExecute = $false
-    $Process.StartInfo.RedirectStandardOutput = $true
-    $Process.StartInfo.RedirectStandardError = $true
+    $Process.StartInfo.RedirectStandardOutput = $false
+    $Process.StartInfo.RedirectStandardError = $false
     $Process.StartInfo.CreateNoWindow = $true
 
     try {
@@ -32,14 +32,6 @@ function Invoke-PesterCommand {
             throw "Timed out running pester $($Arguments -join ' ')"
         }
 
-        $Output = $Process.StandardOutput.ReadToEnd()
-        $ErrorOutput = $Process.StandardError.ReadToEnd()
-        if (-not [string]::IsNullOrWhiteSpace($Output)) {
-            Write-Output $Output.TrimEnd()
-        }
-        if (-not [string]::IsNullOrWhiteSpace($ErrorOutput)) {
-            Write-Output $ErrorOutput.TrimEnd()
-        }
         if ($Process.ExitCode -ne 0) {
             throw "pester $($Arguments -join ' ') failed with exit code $($Process.ExitCode)"
         }
