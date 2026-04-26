@@ -140,7 +140,10 @@ mod tests {
     #[test]
     fn compares_versions_numerically() {
         assert_eq!(compare_versions("0.1.8", "0.1.9").unwrap(), Ordering::Less);
-        assert_eq!(compare_versions("0.2.0", "0.1.9").unwrap(), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.2.0", "0.1.9").unwrap(),
+            Ordering::Greater
+        );
         assert_eq!(compare_versions("1.0.0", "1.0.0").unwrap(), Ordering::Equal);
     }
 

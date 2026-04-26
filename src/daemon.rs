@@ -373,7 +373,12 @@ mod tests {
     fn newly_added_reminder_does_not_notify_for_an_already_started_window() {
         let now = Local.with_ymd_and_hms(2026, 4, 21, 23, 49, 0).unwrap();
         let mut reminder = reminder_with_id("overnight", "01:00", "5m");
-        reminder.starts_on = Some(Local.with_ymd_and_hms(2026, 4, 22, 0, 0, 0).unwrap().date_naive());
+        reminder.starts_on = Some(
+            Local
+                .with_ymd_and_hms(2026, 4, 22, 0, 0, 0)
+                .unwrap()
+                .date_naive(),
+        );
         let config = config(vec![reminder]);
         let state = State::default();
 

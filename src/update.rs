@@ -24,7 +24,10 @@ mod platform {
         let status = version::check_for_update()?;
 
         if !status.is_update_available() {
-            term::ok(format!("pester {} is already up to date.", status.current_version));
+            term::ok(format!(
+                "pester {} is already up to date.",
+                status.current_version
+            ));
             return Ok(());
         }
 
@@ -72,7 +75,8 @@ mod platform {
         fn detect() -> Result<Self> {
             let home = home_dir()?;
             let managed_binary = home.join(".local/bin/pester");
-            let current = std::env::current_exe().context("could not determine current executable")?;
+            let current =
+                std::env::current_exe().context("could not determine current executable")?;
 
             #[cfg(target_os = "linux")]
             if current != managed_binary {
@@ -161,7 +165,13 @@ mod platform {
     fn verify_checksum(temp_dir: &Path, checksum_path: &Path) -> Result<()> {
         let result = if command_exists("sha256sum") {
             Command::new("sha256sum")
-                .args(["-c", checksum_path.file_name().and_then(OsStr::to_str).unwrap_or("")])
+                .args([
+                    "-c",
+                    checksum_path
+                        .file_name()
+                        .and_then(OsStr::to_str)
+                        .unwrap_or(""),
+                ])
                 .current_dir(temp_dir)
                 .status()
                 .context("failed to run sha256sum")?
@@ -171,7 +181,10 @@ mod platform {
                     "-a",
                     "256",
                     "-c",
-                    checksum_path.file_name().and_then(OsStr::to_str).unwrap_or(""),
+                    checksum_path
+                        .file_name()
+                        .and_then(OsStr::to_str)
+                        .unwrap_or(""),
                 ])
                 .current_dir(temp_dir)
                 .status()
@@ -231,8 +244,8 @@ mod platform {
 
     fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
         fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)
-            .with_context(|| format!("failed to read {}", source.display()))?
+        for entry in
+            fs::read_dir(source).with_context(|| format!("failed to read {}", source.display()))?
         {
             let entry = entry?;
             let entry_type = entry.file_type()?;
@@ -297,7 +310,8 @@ mod platform {
                 .duration_since(UNIX_EPOCH)
                 .context("system clock is before UNIX_EPOCH")?
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
             fs::create_dir_all(&path)
                 .with_context(|| format!("failed to create {}", path.display()))?;
             Ok(Self { path })
