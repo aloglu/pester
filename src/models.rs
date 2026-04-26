@@ -29,6 +29,8 @@ pub struct Reminder {
     pub time: String,
     pub repeat_every: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_on: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<String>,
     #[serde(default, rename = "for", skip_serializing_if = "Option::is_none")]
     pub active_for: Option<String>,
@@ -134,6 +136,7 @@ mod tests {
                 message: "No exciting stuff now.".to_string(),
                 time: "22:00".to_string(),
                 repeat_every: "5m".to_string(),
+                starts_on: None,
                 until: None,
                 active_for: None,
                 max_notifications: None,
@@ -149,6 +152,7 @@ mod tests {
         assert_eq!(decoded.reminders.len(), 1);
         assert_eq!(decoded.reminders[0].id, "winddown");
         assert_eq!(decoded.reminders[0].time, "22:00");
+        assert!(decoded.reminders[0].starts_on.is_none());
         assert!(decoded.reminders[0].until.is_none());
         assert!(decoded.reminders[0].active_for.is_none());
         assert!(decoded.reminders[0].max_notifications.is_none());
@@ -170,6 +174,7 @@ repeat_every = "5m"
         .unwrap();
 
         assert!(decoded.reminders[0].enabled);
+        assert!(decoded.reminders[0].starts_on.is_none());
         assert!(decoded.reminders[0].until.is_none());
         assert!(decoded.reminders[0].active_for.is_none());
         assert!(decoded.reminders[0].max_notifications.is_none());
@@ -185,6 +190,7 @@ repeat_every = "5m"
                 message: "Stand up.".to_string(),
                 time: "14:00".to_string(),
                 repeat_every: "10m".to_string(),
+                starts_on: Some(NaiveDate::from_ymd_opt(2026, 4, 21).unwrap()),
                 until: None,
                 active_for: Some("1h".to_string()),
                 max_notifications: Some(3),
@@ -195,9 +201,14 @@ repeat_every = "5m"
         };
 
         let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
 
         assert!(encoded.contains("for = \"1h\""));
         assert!(encoded.contains("max = 3"));
+        assert_eq!(
+            decoded.reminders[0].starts_on,
+            Some(NaiveDate::from_ymd_opt(2026, 4, 21).unwrap())
+        );
     }
 
     #[test]
@@ -209,6 +220,7 @@ repeat_every = "5m"
                 message: "Take medication.".to_string(),
                 time: "09:00".to_string(),
                 repeat_every: "5m".to_string(),
+                starts_on: None,
                 until: None,
                 active_for: None,
                 max_notifications: None,

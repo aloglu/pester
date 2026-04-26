@@ -1,12 +1,12 @@
 use anyhow::{bail, Context, Result};
-use chrono::{Local, Timelike};
+use chrono::{Days, Local, NaiveDate, Timelike};
 use clap::Parser;
 use pester::cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs};
 use pester::confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
 use pester::models::{Reminder, State};
 use pester::schedule::{parse_repeat_interval, parse_time, parse_window_duration};
 use pester::store::Store;
-use pester::{daemon, notify, service, term, version};
+use pester::{daemon, notify, service, term, update, version};
 
 const DEFAULT_WINDOW_WARNING_NOTIFICATION_LIMIT: u64 = 12;
 
@@ -91,6 +91,7 @@ fn main() -> Result<()> {
             SystemCommand::Uninstall(args) => uninstall(&store, args.delete_data, args.yes),
             SystemCommand::Daemon => daemon::run(store),
         },
+        Command::Update => update::run(&store.paths),
         Command::Version => unreachable!(),
     }
 }
@@ -138,8 +139,9 @@ fn add_reminder(store: &Store, input: AddReminderInput) -> Result<()> {
         id: id.clone(),
         title,
         message,
-        time,
+        time: time.clone(),
         repeat_every: every,
+        starts_on: Some(initial_start_date(&time)?),
         until,
         active_for,
         max_notifications,
@@ -151,6 +153,19 @@ fn add_reminder(store: &Store, input: AddReminderInput) -> Result<()> {
     let reminder = config.reminder(&id).expect("reminder was just added");
     warn_if_default_window_is_short(reminder)?;
     Ok(())
+}
+
+fn initial_start_date(time: &str) -> Result<NaiveDate> {
+    let now = Local::now();
+    let scheduled = parse_time(time)?;
+
+    if now.time() <= scheduled {
+        Ok(now.date_naive())
+    } else {
+        now.date_naive()
+            .checked_add_days(Days::new(1))
+            .context("could not calculate next reminder date")
+    }
 }
 
 struct SetReminderInput {
@@ -683,6 +698,12 @@ fn system_status(store: &Store, verbose: bool) -> Result<()> {
 
 fn show_version() -> Result<()> {
     println!("pester {}", version::CURRENT_VERSION);
+    if let Ok(status) = version::check_for_update() {
+        if status.is_update_available() {
+            term::warn(format!("Update available: {}", status.latest_version));
+            term::detail("Run: pester update");
+        }
+    }
     Ok(())
 }
 
@@ -707,6 +728,7 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
         "test",
         "undone",
         "uninstall",
+        "update",
         "version",
     ];
 

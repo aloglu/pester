@@ -206,6 +206,7 @@ mod tests {
                 message: "No exciting stuff now.".to_string(),
                 time: "22:00".to_string(),
                 repeat_every: "5m".to_string(),
+                starts_on: None,
                 until: None,
                 active_for: None,
                 max_notifications: None,

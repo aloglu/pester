@@ -9,6 +9,7 @@ pub mod schedule;
 pub mod service;
 pub mod store;
 pub mod term;
+pub mod update;
 pub mod version;
 #[cfg(target_os = "windows")]
 pub mod windows_ipc;

@@ -102,6 +102,14 @@ Show the installed version:
 pester version
 ```
 
+If a newer release is available, `pester version` tells you and suggests `pester update`.
+
+Update to the latest release:
+
+```sh
+pester update
+```
+
 Send a test notification:
 
 ```sh
@@ -172,6 +180,7 @@ pester confirm set [<id>] [--phrase <phrase>]
 pester confirm show [<id>]
 pester confirm reset [<id>]
 pester version
+pester update
 pester system status [--verbose]
 pester system install
 pester system uninstall [--delete-data]

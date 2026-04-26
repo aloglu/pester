@@ -117,6 +117,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SystemCommand,
     },
+    /// Update pester to the latest release.
+    Update,
     /// Show version information.
     Version,
 }
@@ -272,6 +274,11 @@ mod tests {
         assert_eq!(version.kind(), clap::error::ErrorKind::DisplayVersion);
         assert!(Cli::try_parse_from(["pester", "version"]).is_ok());
         assert!(Cli::try_parse_from(["pester", "version", "--check"]).is_err());
+    }
+
+    #[test]
+    fn update_command_parses() {
+        assert!(Cli::try_parse_from(["pester", "update"]).is_ok());
     }
 
     #[test]

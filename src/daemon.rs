@@ -132,6 +132,13 @@ fn active_window(reminder: &Reminder, now: DateTime<Local>) -> Result<Option<Rem
 
     for date in [today, yesterday] {
         let window = reminder_window_for_date(reminder, date)?;
+        if reminder
+            .starts_on
+            .map(|starts_on| window.state_date < starts_on)
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let now = now.naive_local();
         if now >= window.starts_at && now < window.ends_at {
             return Ok(Some(window));
@@ -221,6 +228,7 @@ mod tests {
             message: "No exciting stuff now.".to_string(),
             time: time.to_string(),
             repeat_every: repeat_every.to_string(),
+            starts_on: None,
             until: None,
             active_for: None,
             max_notifications: None,
@@ -236,6 +244,7 @@ mod tests {
             message: "Test".to_string(),
             time: time.to_string(),
             repeat_every: repeat_every.to_string(),
+            starts_on: None,
             until: None,
             active_for: None,
             max_notifications: None,
@@ -355,6 +364,29 @@ mod tests {
     fn default_window_stops_at_midnight() {
         let now = Local.with_ymd_and_hms(2026, 4, 22, 0, 0, 0).unwrap();
         let config = config(vec![reminder_with_id("winddown", "23:50", "5m")]);
+        let state = State::default();
+
+        assert!(due_reminders(&config, &state, now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn newly_added_reminder_does_not_notify_for_an_already_started_window() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 23, 49, 0).unwrap();
+        let mut reminder = reminder_with_id("overnight", "01:00", "5m");
+        reminder.starts_on = Some(Local.with_ymd_and_hms(2026, 4, 22, 0, 0, 0).unwrap().date_naive());
+        let config = config(vec![reminder]);
+        let state = State::default();
+
+        assert!(due_reminders(&config, &state, now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn newly_added_cross_midnight_reminder_waits_for_its_first_future_occurrence() {
+        let now = Local.with_ymd_and_hms(2026, 4, 22, 0, 30, 0).unwrap();
+        let mut reminder = reminder_with_id("overnight", "23:50", "5m");
+        reminder.until = Some("03:00".to_string());
+        reminder.starts_on = Some(now.date_naive());
+        let config = config(vec![reminder]);
         let state = State::default();
 
         assert!(due_reminders(&config, &state, now).unwrap().is_empty());

@@ -125,6 +125,7 @@ mod tests {
             message: "Take medication.".to_string(),
             time: "09:00".to_string(),
             repeat_every: "5m".to_string(),
+            starts_on: None,
             until: None,
             active_for: None,
             max_notifications: None,
