@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Days, Local, NaiveDate, Timelike};
 use clap::Parser;
+use pester::activity::{ReminderTrayState, TrayState};
 use pester::cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs, TimerArgs};
 use pester::confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
 use pester::models::{Reminder, State, Timer};
@@ -836,6 +837,47 @@ fn system_status(store: &Store, verbose: bool) -> Result<()> {
         term::heading("Notifications");
         for line in notify::diagnostics() {
             term::detail(line);
+        }
+        println!();
+        term::heading("Runtime");
+        let config = store.load_config()?;
+        let state = store.load_state()?;
+        let activity = pester::tray::runtime_activity(&config, &state)?;
+        term::key_value(
+            "tray state",
+            match activity.tray_state {
+                TrayState::Hidden => "hidden",
+                TrayState::Active => "active",
+                TrayState::Alert => "alert",
+            },
+        );
+        term::key_value("active reminders", activity.active_reminders.len());
+        term::key_value("timers", activity.timers.len());
+        for reminder in activity.active_reminders {
+            let detail = match reminder.state {
+                ReminderTrayState::ActiveWindow => format!(
+                    "active until {}",
+                    reminder.relevant_at.format("%Y-%m-%d %H:%M:%S %Z")
+                ),
+                ReminderTrayState::Scheduled => format!(
+                    "next at {}",
+                    reminder.relevant_at.format("%Y-%m-%d %H:%M:%S %Z")
+                ),
+            };
+            term::detail(format!(
+                "reminder {} ({}) {detail}",
+                reminder.id, reminder.title,
+            ));
+        }
+        for timer in activity.timers {
+            let status = if timer.expired { "expired" } else { "running" };
+            term::detail(format!(
+                "timer {} ({}) {} until {}",
+                timer.id,
+                timer.title,
+                status,
+                timer.ends_at.format("%Y-%m-%d %H:%M:%S %Z")
+            ));
         }
     }
     Ok(())

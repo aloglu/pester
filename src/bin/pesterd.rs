@@ -18,9 +18,14 @@ fn main() -> Result<()> {
         pester::daemon::run_with_shutdown(Store::new()?, |duration| stop_event.wait(duration))
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     {
         pester::daemon::run(Store::new()?)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        pester::tray::run_daemon(Store::new()?)
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "pester"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/aloglu/pester"
@@ -38,5 +38,5 @@ windows = { version = "0.58", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSError"] }
-objc2-user-notifications = "0.3"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSSet", "NSString", "NSError", "NSDate", "NSRunLoop", "NSObjCRuntime", "NSObject"] }
+objc2-user-notifications = { version = "0.3", features = ["UNNotification", "UNNotificationAction", "UNNotificationCategory", "UNNotificationResponse"] }

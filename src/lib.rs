@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod app;
 pub mod cli;
 pub mod confirm;
@@ -9,6 +10,7 @@ pub mod schedule;
 pub mod service;
 pub mod store;
 pub mod term;
+pub mod tray;
 pub mod update;
 pub mod version;
 #[cfg(target_os = "windows")]

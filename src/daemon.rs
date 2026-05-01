@@ -8,6 +8,7 @@ use crate::models::{Config, Reminder, State, Timer};
 use crate::notify;
 use crate::schedule::{parse_repeat_interval, parse_window_duration};
 use crate::store::Store;
+use crate::tray::{self, Tray};
 
 pub fn run(store: Store) -> Result<()> {
     run_with_shutdown(store, |duration| {
@@ -21,8 +22,10 @@ where
     F: FnMut(Duration) -> bool,
 {
     tracing::info!("pester daemon started.");
+    let mut tray = tray::create();
+    let mut notifier = notify::Handle::new()?;
     loop {
-        if let Err(error) = tick(&store) {
+        if let Err(error) = tick_with_tray(&store, tray.as_mut(), &mut notifier) {
             tracing::error!("{error:#}");
         }
 
@@ -33,16 +36,36 @@ where
     }
 }
 
-fn tick(store: &Store) -> Result<()> {
+pub(crate) fn tick_with_tray(
+    store: &Store,
+    tray: &mut dyn Tray,
+    notifier: &mut notify::Handle,
+) -> Result<()> {
     let config = store.load_config()?;
     let mut state = store.load_state()?;
+    let mut changed = false;
+    for timer_id in notifier.drain_dismissed_timer_ids() {
+        if state
+            .timers
+            .get(&timer_id)
+            .map(|timer| timer.is_expired())
+            .unwrap_or(false)
+        {
+            state.timers.remove(&timer_id);
+            changed = true;
+        }
+    }
+    if changed {
+        store.save_state(&state)?;
+    }
     let now = Local::now();
-    deliver_due_reminders(&config, &mut state, now, notify::send, |state| {
+    deliver_due_reminders(&config, &mut state, now, |reminder| notifier.send_reminder(reminder), |state| {
         store.save_state(state)
     })?;
-    deliver_due_timers(&mut state, now, notify::send_timer, |state| {
+    deliver_due_timers(&mut state, now, |timer| notifier.send_timer(timer), |state| {
         store.save_state(state)
-    })
+    })?;
+    tray.refresh(&config, &state)
 }
 
 fn deliver_due_reminders<F, S>(
@@ -164,13 +187,16 @@ fn is_due(reminder: &Reminder, now: DateTime<Local>) -> Result<bool> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ReminderWindow {
-    state_date: NaiveDate,
-    starts_at: NaiveDateTime,
-    ends_at: NaiveDateTime,
+pub(crate) struct ReminderWindow {
+    pub(crate) state_date: NaiveDate,
+    pub(crate) starts_at: NaiveDateTime,
+    pub(crate) ends_at: NaiveDateTime,
 }
 
-fn active_window(reminder: &Reminder, now: DateTime<Local>) -> Result<Option<ReminderWindow>> {
+pub(crate) fn active_window(
+    reminder: &Reminder,
+    now: DateTime<Local>,
+) -> Result<Option<ReminderWindow>> {
     let today = now.date_naive();
     let yesterday = today
         .checked_sub_days(Days::new(1))
@@ -256,7 +282,7 @@ fn duration_until_next_second(now: DateTime<Local>) -> Duration {
     }
 }
 
-fn parse_timer_end(timer: &Timer) -> Result<DateTime<Local>> {
+pub(crate) fn parse_timer_end(timer: &Timer) -> Result<DateTime<Local>> {
     Ok(DateTime::parse_from_rfc3339(&timer.ends_at)
         .with_context(|| format!("invalid timer end timestamp for {}", timer.id))?
         .with_timezone(&Local))

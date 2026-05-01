@@ -2,6 +2,32 @@ use anyhow::Result;
 
 use crate::models::{Reminder, Timer};
 
+pub struct Handle {
+    platform: platform::Handle,
+}
+
+impl Handle {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            platform: platform::Handle::new()?,
+        })
+    }
+
+    pub fn send_reminder(&mut self, reminder: &Reminder) -> Result<()> {
+        self.platform.send(&reminder.title, &reminder.message)?;
+        Ok(())
+    }
+
+    pub fn send_timer(&mut self, timer: &Timer) -> Result<()> {
+        self.platform.send_timer(timer)?;
+        Ok(())
+    }
+
+    pub fn drain_dismissed_timer_ids(&mut self) -> Vec<String> {
+        self.platform.drain_dismissed_timer_ids()
+    }
+}
+
 pub fn send(reminder: &Reminder) -> Result<()> {
     send_notification(&reminder.title, &reminder.message)
 }
@@ -50,29 +76,99 @@ mod platform {
     use std::env;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::thread;
 
     use anyhow::{Context, Result};
-    use zbus::blocking::Connection;
+    use zbus::blocking::{Connection, Proxy, SignalIterator};
     use zbus::zvariant::{OwnedValue, Str};
+
+    use crate::models::Timer;
 
     const CRITICAL_URGENCY: u8 = 2;
     const REMINDER_SOUND_NAME: &str = "alarm-clock-elapsed";
 
+    pub struct Handle {
+        proxy: Proxy<'static>,
+        sound_support: SoundSupport,
+        closed_rx: mpsc::Receiver<u32>,
+        timer_notifications: HashMap<u32, String>,
+    }
+
+    impl Handle {
+        pub fn new() -> Result<Self> {
+            let connection = zbus::blocking::Connection::session().context(
+                "could not connect to the user D-Bus session; desktop notifications may be unavailable in this environment",
+            )?;
+            let proxy = notifications_proxy(&connection)?;
+            let sound_support = notification_sound_support(&proxy).unwrap_or_else(|error| {
+                tracing::warn!("could not inspect notification capabilities: {error:#}");
+                SoundSupport::Unknown
+            });
+
+            let (closed_tx, closed_rx) = mpsc::channel();
+            spawn_close_listener(closed_tx);
+
+            Ok(Self {
+                proxy,
+                sound_support,
+                closed_rx,
+                timer_notifications: HashMap::new(),
+            })
+        }
+
+        pub fn send(&mut self, title: &str, message: &str) -> Result<()> {
+            let id = send_via_proxy(&self.proxy, title, message)?;
+            if matches!(self.sound_support, SoundSupport::FallbackNeeded) {
+                if let Err(error) = play_sound_fallback(title) {
+                    tracing::warn!("could not play Linux notification sound fallback: {error:#}");
+                }
+            }
+            tracing::debug!("sent Linux notification {id} for {title}");
+            Ok(())
+        }
+
+        pub fn send_timer(&mut self, timer: &Timer) -> Result<()> {
+            let id = send_via_proxy(&self.proxy, &timer.title, &timer.message)?;
+            self.timer_notifications.insert(id, timer.id.clone());
+            if matches!(self.sound_support, SoundSupport::FallbackNeeded) {
+                if let Err(error) = play_sound_fallback(&timer.title) {
+                    tracing::warn!("could not play Linux notification sound fallback: {error:#}");
+                }
+            }
+            Ok(())
+        }
+
+        pub fn drain_dismissed_timer_ids(&mut self) -> Vec<String> {
+            let mut dismissed = Vec::new();
+            while let Ok(notification_id) = self.closed_rx.try_recv() {
+                if let Some(timer_id) = self.timer_notifications.remove(&notification_id) {
+                    dismissed.push(timer_id);
+                }
+            }
+            dismissed
+        }
+    }
+
     pub fn send(title: &str, message: &str) -> Result<()> {
-        let connection = Connection::session()
-            .context("could not connect to the user D-Bus session; desktop notifications may be unavailable in this environment")?;
-        let proxy = zbus::blocking::Proxy::new(
-            &connection,
-            "org.freedesktop.Notifications",
-            "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications",
-        )
-        .context("could not connect to the Freedesktop notification service")?;
+        let connection = zbus::blocking::Connection::session().context(
+            "could not connect to the user D-Bus session; desktop notifications may be unavailable in this environment",
+        )?;
+        let proxy = notifications_proxy(&connection)?;
         let sound_support = notification_sound_support(&proxy).unwrap_or_else(|error| {
             tracing::warn!("could not inspect notification capabilities: {error:#}");
             SoundSupport::Unknown
         });
+        send_via_proxy(&proxy, title, message)?;
+        if matches!(sound_support, SoundSupport::FallbackNeeded) {
+            if let Err(error) = play_sound_fallback(title) {
+                tracing::warn!("could not play Linux notification sound fallback: {error:#}");
+            }
+        }
+        Ok(())
+    }
 
+    fn send_via_proxy(proxy: &Proxy<'_>, title: &str, message: &str) -> Result<u32> {
         let actions: Vec<&str> = Vec::new();
         let mut hints: HashMap<&str, OwnedValue> = HashMap::new();
         hints.insert("urgency", CRITICAL_URGENCY.into());
@@ -95,16 +191,7 @@ mod platform {
         );
 
         match result {
-            Ok(_) => {
-                if matches!(sound_support, SoundSupport::FallbackNeeded) {
-                    if let Err(error) = play_sound_fallback(title) {
-                        tracing::warn!(
-                            "could not play Linux notification sound fallback: {error:#}"
-                        );
-                    }
-                }
-                Ok(())
-            }
+            Ok(id) => Ok(id),
             Err(error) if is_service_unknown(&error) => Err(error).context(
                 "no Freedesktop notification service is registered on the user D-Bus session; WSL and headless Linux sessions usually need desktop notification forwarding or a notification daemon",
             ),
@@ -112,6 +199,51 @@ mod platform {
                 Err(error).context("the desktop notification service rejected the notification")
             }
         }
+    }
+
+    fn notifications_proxy(connection: &zbus::blocking::Connection) -> Result<Proxy<'static>> {
+        let proxy = Proxy::new(
+            connection,
+            "org.freedesktop.Notifications",
+            "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications",
+        )
+        .context("could not connect to the Freedesktop notification service")?;
+        Ok(proxy)
+    }
+
+    fn spawn_close_listener(closed_tx: mpsc::Sender<u32>) {
+        thread::spawn(move || {
+            if let Err(error) = run_close_listener(closed_tx) {
+                tracing::warn!("Linux notification close listener stopped: {error:#}");
+            }
+        });
+    }
+
+    fn run_close_listener(closed_tx: mpsc::Sender<u32>) -> Result<()> {
+        let connection = zbus::blocking::Connection::session()
+            .context("could not connect close-listener to the user D-Bus session")?;
+        let proxy = notifications_proxy(&connection)?;
+        let mut signals = proxy
+            .receive_signal("NotificationClosed")
+            .context("could not subscribe to NotificationClosed signals")?;
+        forward_closed_notifications(&mut signals, closed_tx)
+    }
+
+    fn forward_closed_notifications(
+        signals: &mut SignalIterator<'_>,
+        closed_tx: mpsc::Sender<u32>,
+    ) -> Result<()> {
+        for signal in signals {
+            let (notification_id, _reason): (u32, u32) = signal
+                .body()
+                .deserialize()
+                .context("could not decode NotificationClosed signal")?;
+            if closed_tx.send(notification_id).is_err() {
+                break;
+            }
+        }
+        Ok(())
     }
 
     pub fn diagnostics() -> Vec<String> {
@@ -295,18 +427,119 @@ mod tests {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ptr::NonNull;
     use std::sync::mpsc;
+    use std::sync::{Mutex, OnceLock};
+    use std::ptr::NonNull;
     use std::time::Duration;
 
     use anyhow::{Context, Result};
     use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2::{define_class, msg_send, MainThreadOnly};
     use objc2::runtime::Bool;
-    use objc2_foundation::{NSError, NSString};
+    use objc2_foundation::{
+        NSArray, NSError, MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSSet,
+        NSString,
+    };
     use objc2_user_notifications::{
+        UNNotification, UNNotificationCategory, UNNotificationCategoryOptions,
+        UNNotificationDefaultActionIdentifier,
+        UNNotificationDismissActionIdentifier, UNNotificationPresentationOptionNone,
+        UNNotificationPresentationOptions, UNNotificationResponse,
         UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationInterruptionLevel,
         UNNotificationRequest, UNNotificationSound, UNUserNotificationCenter,
+        UNUserNotificationCenterDelegate,
     };
+
+    use crate::models::Timer;
+
+    const TIMER_NOTIFICATION_CATEGORY: &str = "pester.timer";
+    const TIMER_NOTIFICATION_PREFIX: &str = "pester-timer:";
+
+    static TIMER_RESPONSE_TX: OnceLock<Mutex<Option<mpsc::Sender<String>>>> = OnceLock::new();
+
+    pub struct Handle {
+        _delegate: Retained<NotificationDelegate>,
+        response_rx: mpsc::Receiver<String>,
+    }
+
+    impl Handle {
+        pub fn new() -> Result<Self> {
+            let mtm = MainThreadMarker::new()
+                .ok_or_else(|| anyhow::anyhow!("macOS notifications must initialize on the main thread"))?;
+            let center = UNUserNotificationCenter::currentNotificationCenter();
+            install_timer_category(&center);
+
+            let (response_tx, response_rx) = mpsc::channel();
+            let shared_tx = TIMER_RESPONSE_TX.get_or_init(|| Mutex::new(None));
+            *shared_tx
+                .lock()
+                .expect("macOS notification sender lock poisoned") = Some(response_tx);
+
+            let delegate = NotificationDelegate::new(mtm);
+            center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
+            Ok(Self {
+                _delegate: delegate,
+                response_rx,
+            })
+        }
+
+        pub fn send(&mut self, title: &str, message: &str) -> Result<()> {
+            send(title, message)
+        }
+
+        pub fn send_timer(&mut self, timer: &Timer) -> Result<()> {
+            send_timer_notification(timer)
+        }
+
+        pub fn drain_dismissed_timer_ids(&mut self) -> Vec<String> {
+            let mut dismissed = Vec::new();
+            while let Ok(timer_id) = self.response_rx.try_recv() {
+                dismissed.push(timer_id);
+            }
+            dismissed
+        }
+    }
+
+    define_class!(
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        struct NotificationDelegate;
+
+        unsafe impl NSObjectProtocol for NotificationDelegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn user_notification_center_did_receive_notification_response_with_completion_handler(
+                &self,
+                _center: &UNUserNotificationCenter,
+                response: &UNNotificationResponse,
+                completion_handler: &block2::DynBlock<dyn Fn()>,
+            ) {
+                handle_timer_response(response);
+                completion_handler.call(());
+            }
+
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn user_notification_center_will_present_notification_with_completion_handler(
+                &self,
+                _center: &UNUserNotificationCenter,
+                _notification: &UNNotification,
+                completion_handler: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+            ) {
+                completion_handler.call(UNNotificationPresentationOptionNone);
+            }
+        }
+    );
+
+    impl NotificationDelegate {
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            let this = Self::alloc(mtm);
+            unsafe { msg_send![super(this), init] }
+        }
+    }
 
     pub fn send(title: &str, message: &str) -> Result<()> {
         let center = UNUserNotificationCenter::currentNotificationCenter();
@@ -320,6 +553,28 @@ mod platform {
         content.setInterruptionLevel(UNNotificationInterruptionLevel::TimeSensitive);
 
         let identifier = NSString::from_str("pester-notification");
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+            &identifier,
+            &content,
+            None,
+        );
+        add_request(&center, &request)?;
+        Ok(())
+    }
+
+    fn send_timer_notification(timer: &Timer) -> Result<()> {
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        request_authorization(&center)?;
+
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(&timer.title));
+        content.setBody(&NSString::from_str(&timer.message));
+        content.setCategoryIdentifier(&NSString::from_str(TIMER_NOTIFICATION_CATEGORY));
+        let sound = UNNotificationSound::defaultSound();
+        content.setSound(Some(&sound));
+        content.setInterruptionLevel(UNNotificationInterruptionLevel::TimeSensitive);
+
+        let identifier = NSString::from_str(&timer_request_identifier(&timer.id));
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
             &identifier,
             &content,
@@ -394,6 +649,53 @@ mod platform {
     fn nonnull_error(error: *mut NSError) -> Option<NonNull<NSError>> {
         NonNull::new(error)
     }
+
+    fn install_timer_category(center: &UNUserNotificationCenter) {
+        let identifier = NSString::from_str(TIMER_NOTIFICATION_CATEGORY);
+        let actions = NSArray::from_slice(&[]);
+        let intents: Retained<NSArray<NSString>> = NSArray::from_slice(&[]);
+        let category = UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
+            &identifier,
+            &actions,
+            &intents,
+            UNNotificationCategoryOptions::CustomDismissAction,
+        );
+        let categories = NSSet::from_retained_slice(&[category]);
+        center.setNotificationCategories(&categories);
+    }
+
+    fn handle_timer_response(response: &UNNotificationResponse) {
+        let action = response.actionIdentifier();
+        let should_clear =
+            action == *UNNotificationDismissActionIdentifier || action == *UNNotificationDefaultActionIdentifier;
+        if !should_clear {
+            return;
+        }
+
+        let request = response.notification().request();
+        let request_id = request.identifier().to_string();
+        let Some(timer_id) = timer_id_from_request_identifier(&request_id) else {
+            return;
+        };
+
+        if let Some(shared_tx) = TIMER_RESPONSE_TX.get() {
+            if let Some(tx) = shared_tx
+                .lock()
+                .expect("macOS notification sender lock poisoned")
+                .as_ref()
+            {
+                let _ = tx.send(timer_id.to_string());
+            }
+        }
+    }
+
+    fn timer_request_identifier(timer_id: &str) -> String {
+        format!("{TIMER_NOTIFICATION_PREFIX}{timer_id}")
+    }
+
+    fn timer_id_from_request_identifier(request_id: &str) -> Option<&str> {
+        request_id.strip_prefix(TIMER_NOTIFICATION_PREFIX)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -402,6 +704,28 @@ mod platform {
     use windows::core::HSTRING;
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+
+    use crate::models::Timer;
+
+    pub struct Handle;
+
+    impl Handle {
+        pub fn new() -> Result<Self> {
+            Ok(Self)
+        }
+
+        pub fn send(&mut self, title: &str, message: &str) -> Result<()> {
+            send(title, message)
+        }
+
+        pub fn send_timer(&mut self, timer: &Timer) -> Result<()> {
+            send(&timer.title, &timer.message)
+        }
+
+        pub fn drain_dismissed_timer_ids(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+    }
 
     pub fn send(title: &str, message: &str) -> Result<()> {
         let document = toast_document(title, message)?;
@@ -455,6 +779,28 @@ mod platform {
 mod platform {
     use anyhow::bail;
     use anyhow::Result;
+
+    use crate::models::Timer;
+
+    pub struct Handle;
+
+    impl Handle {
+        pub fn new() -> Result<Self> {
+            Ok(Self)
+        }
+
+        pub fn send(&mut self, title: &str, message: &str) -> Result<()> {
+            send(title, message)
+        }
+
+        pub fn send_timer(&mut self, timer: &Timer) -> Result<()> {
+            send(&timer.title, &timer.message)
+        }
+
+        pub fn drain_dismissed_timer_ids(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+    }
 
     pub fn send(_title: &str, _message: &str) -> Result<()> {
         bail!("notifications are only supported on Linux, macOS, and Windows")

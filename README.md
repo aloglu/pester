@@ -118,6 +118,12 @@ pester timer list
 pester timer stop tea
 ```
 
+Tray behavior:
+
+- `pester` shows a tray or menu bar icon while timers exist or enabled reminders exist.
+- Selecting the tray item shows running timers and reminder status.
+- On Linux and macOS, explicitly dismissing or opening an expired timer notification clears that expired timer from tray state.
+
 Send a test notification:
 
 ```sh
@@ -239,6 +245,12 @@ Desktop environments such as GNOME, KDE Plasma, XFCE, and Cinnamon usually
 provide a notification service. Minimal window manager setups may need a
 notification daemon such as `dunst` or `mako`.
 
+pester also exports a tray status item over the standard Linux tray interfaces.
+The tray item appears when timers exist or enabled reminders exist, and its
+menu shows running timers together with reminder status. Support still depends
+on the desktop environment's tray implementation, so it is usually better on
+KDE, XFCE, Cinnamon, and Waybar-based setups than on GNOME.
+
 ### macOS
 
 pester uses the UserNotifications framework.
@@ -257,6 +269,8 @@ The installer installs:
 
 The LaunchAgent runs the executable inside `pester.app` so macOS has a stable
 app identity for notification permissions.
+pester also creates a menu bar item while timers exist or enabled reminders
+exist, and selecting it shows running timers together with reminder status.
 
 ### Windows
 
@@ -314,6 +328,7 @@ pester system status --verbose
 - state path
 - current binary path
 - notification backend status
+- runtime tray state
 - background service status
 - platform-specific install details
 
