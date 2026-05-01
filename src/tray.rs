@@ -118,8 +118,8 @@ mod platform {
 
         impl LinuxTray {
             pub fn new() -> Result<Self> {
-                let connection = Connection::session()
-                    .context("could not connect to the user D-Bus session")?;
+                let connection =
+                    Connection::session().context("could not connect to the user D-Bus session")?;
                 let icon_path = super::super::ensure_embedded_tray_icon()?;
                 let icon_dir = icon_path
                     .parent()
@@ -151,7 +151,8 @@ mod platform {
                     },
                 )?;
 
-                let item_iface = object_server.interface::<_, StatusNotifierItem>(ITEM_OBJECT_PATH)?;
+                let item_iface =
+                    object_server.interface::<_, StatusNotifierItem>(ITEM_OBJECT_PATH)?;
                 let menu_iface = object_server.interface::<_, DbusMenu>(MENU_OBJECT_PATH)?;
 
                 Ok(Self {
@@ -174,10 +175,8 @@ mod platform {
                     let Ok(proxy) = proxy else {
                         continue;
                     };
-                    let result = proxy.call_method(
-                        "RegisterStatusNotifierItem",
-                        &(self.item_name.as_str()),
-                    );
+                    let result =
+                        proxy.call_method("RegisterStatusNotifierItem", &(self.item_name.as_str()));
                     if result.is_ok() {
                         self.watcher_registered = true;
                         return;
@@ -387,16 +386,23 @@ mod platform {
                 let model = self.state.lock().expect("tray model lock poisoned");
                 let items = menu_items(&model.activity);
                 let wanted_all = ids.is_empty();
-                items.into_iter()
+                items
+                    .into_iter()
                     .filter(|item| wanted_all || ids.contains(&item.id))
-                    .map(|item| (item.id, select_properties(&item.properties, &property_names)))
+                    .map(|item| {
+                        (
+                            item.id,
+                            select_properties(&item.properties, &property_names),
+                        )
+                    })
                     .collect()
             }
 
             fn get_property(&self, id: i32, name: String) -> OwnedValue {
                 let model = self.state.lock().expect("tray model lock poisoned");
                 let items = menu_items(&model.activity);
-                items.into_iter()
+                items
+                    .into_iter()
                     .find(|item| item.id == id)
                     .and_then(|item| item.properties.get(&name).map(clone_value))
                     .unwrap_or_else(|| string_value(""))
@@ -404,10 +410,7 @@ mod platform {
 
             fn event(&self, _id: i32, _event_id: &str, _data: OwnedValue, _timestamp: u32) {}
 
-            fn event_group(
-                &self,
-                _events: Vec<(i32, String, OwnedValue, u32)>,
-            ) -> Vec<i32> {
+            fn event_group(&self, _events: Vec<(i32, String, OwnedValue, u32)>) -> Vec<i32> {
                 Vec::new()
             }
 
@@ -472,7 +475,11 @@ mod platform {
                 properties: root_properties(),
                 children: menu_items(activity),
             };
-            build_layout(find_menu_item(&root, parent_id).unwrap_or(&root), recursion_depth, property_names)
+            build_layout(
+                find_menu_item(&root, parent_id).unwrap_or(&root),
+                recursion_depth,
+                property_names,
+            )
         }
 
         fn build_layout(
@@ -509,7 +516,9 @@ mod platform {
             if item.id == id {
                 return Some(item);
             }
-            item.children.iter().find_map(|child| find_menu_item(child, id))
+            item.children
+                .iter()
+                .find_map(|child| find_menu_item(child, id))
         }
 
         fn menu_items(activity: &RuntimeActivity) -> Vec<MenuItem> {
@@ -561,10 +570,7 @@ mod platform {
 
         fn section_item(id: i32, label: &str, children: Vec<MenuItem>) -> MenuItem {
             let mut properties = base_item_properties(label);
-            properties.insert(
-                "children-display".to_string(),
-                string_value("submenu"),
-            );
+            properties.insert("children-display".to_string(), string_value("submenu"));
             MenuItem {
                 id,
                 properties,
@@ -757,8 +763,11 @@ mod platform {
             fn root_layout_can_filter_properties() {
                 let (_, _, children) =
                     layout_for_parent(&sample_activity(), 0, 1, &["label".to_string()]);
-                let first_child_layout: (i32, std::collections::HashMap<String, zbus::zvariant::OwnedValue>, Vec<zbus::zvariant::OwnedValue>) =
-                    children[0].try_clone().unwrap().try_into().unwrap();
+                let first_child_layout: (
+                    i32,
+                    std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+                    Vec<zbus::zvariant::OwnedValue>,
+                ) = children[0].try_clone().unwrap().try_into().unwrap();
 
                 assert_eq!(first_child_layout.1.len(), 1);
                 assert!(first_child_layout.1.contains_key("label"));
@@ -782,8 +791,8 @@ mod platform {
     use objc2::rc::Retained;
     use objc2::{extern_class, extern_conformance, extern_methods, MainThreadOnly};
     use objc2_foundation::{
-        ns_string, NSDate, MainThreadMarker, NSDefaultRunLoopMode, NSInteger, NSRunLoop, NSObject,
-        NSObjectProtocol, NSString,
+        ns_string, MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSInteger, NSObject,
+        NSObjectProtocol, NSRunLoop, NSString,
     };
 
     use crate::activity::{ReminderTrayState, RuntimeActivity, TrayState};
@@ -808,7 +817,9 @@ mod platform {
         struct NSApplication;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSApplication {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSApplication {}
+    );
 
     impl NSApplication {
         extern_methods!(
@@ -818,7 +829,8 @@ mod platform {
 
             #[unsafe(method(setActivationPolicy:))]
             #[unsafe(method_family = none)]
-            fn setActivationPolicy(&self, activation_policy: NSApplicationActivationPolicy) -> bool;
+            fn setActivationPolicy(&self, activation_policy: NSApplicationActivationPolicy)
+                -> bool;
         );
     }
 
@@ -829,7 +841,9 @@ mod platform {
         struct NSStatusBar;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSStatusBar {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSStatusBar {}
+    );
 
     impl NSStatusBar {
         extern_methods!(
@@ -850,7 +864,9 @@ mod platform {
         struct NSStatusItem;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSStatusItem {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSStatusItem {}
+    );
 
     impl NSStatusItem {
         extern_methods!(
@@ -875,7 +891,9 @@ mod platform {
         struct NSStatusBarButton;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSStatusBarButton {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSStatusBarButton {}
+    );
 
     impl NSStatusBarButton {
         extern_methods!(
@@ -900,7 +918,9 @@ mod platform {
         struct NSImage;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSImage {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSImage {}
+    );
 
     impl NSImage {
         extern_methods!(
@@ -924,7 +944,9 @@ mod platform {
         struct NSMenu;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSMenu {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSMenu {}
+    );
 
     impl NSMenu {
         extern_methods!(
@@ -945,7 +967,9 @@ mod platform {
         struct NSMenuItem;
     );
 
-    extern_conformance!(unsafe impl NSObjectProtocol for NSMenuItem {});
+    extern_conformance!(
+        unsafe impl NSObjectProtocol for NSMenuItem {}
+    );
 
     impl NSMenuItem {
         extern_methods!(
@@ -1006,7 +1030,11 @@ mod platform {
     }
 
     impl Tray for MacTray {
-        fn refresh(&mut self, config: &crate::models::Config, state: &crate::models::State) -> Result<()> {
+        fn refresh(
+            &mut self,
+            config: &crate::models::Config,
+            state: &crate::models::State,
+        ) -> Result<()> {
             let activity = runtime_activity(config, state)?;
             self.status_item
                 .setVisible(activity.tray_state != TrayState::Hidden);
@@ -1046,8 +1074,7 @@ mod platform {
         let run_loop = NSRunLoop::currentRunLoop();
 
         loop {
-            if let Err(error) =
-                crate::daemon::tick_with_tray(&store, tray.as_mut(), &mut notifier)
+            if let Err(error) = crate::daemon::tick_with_tray(&store, tray.as_mut(), &mut notifier)
             {
                 tracing::error!("{error:#}");
             }
@@ -1121,7 +1148,11 @@ mod platform {
 
     fn summary_lines(activity: &RuntimeActivity) -> Vec<String> {
         let mut lines = Vec::new();
-        let running_timers = activity.timers.iter().filter(|timer| !timer.expired).count();
+        let running_timers = activity
+            .timers
+            .iter()
+            .filter(|timer| !timer.expired)
+            .count();
         let expired_timers = activity.timers.iter().filter(|timer| timer.expired).count();
         lines.push(format!(
             "{} {} timer(s), {} expired",

@@ -427,29 +427,28 @@ mod tests {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    use std::ptr::NonNull;
     use std::sync::mpsc;
     use std::sync::{Mutex, OnceLock};
-    use std::ptr::NonNull;
     use std::time::Duration;
 
     use anyhow::{Context, Result};
     use block2::RcBlock;
     use objc2::rc::Retained;
+    use objc2::runtime::Bool;
     use objc2::runtime::ProtocolObject;
     use objc2::{define_class, msg_send, MainThreadOnly};
-    use objc2::runtime::Bool;
     use objc2_foundation::{
-        NSArray, NSError, MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSSet,
+        MainThreadMarker, NSArray, NSError, NSNotification, NSObject, NSObjectProtocol, NSSet,
         NSString,
     };
     use objc2_user_notifications::{
-        UNNotification, UNNotificationCategory, UNNotificationCategoryOptions,
-        UNNotificationDefaultActionIdentifier,
-        UNNotificationDismissActionIdentifier, UNNotificationPresentationOptionNone,
-        UNNotificationPresentationOptions, UNNotificationResponse,
-        UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationInterruptionLevel,
-        UNNotificationRequest, UNNotificationSound, UNUserNotificationCenter,
-        UNUserNotificationCenterDelegate,
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
+        UNNotificationCategory, UNNotificationCategoryOptions,
+        UNNotificationDefaultActionIdentifier, UNNotificationDismissActionIdentifier,
+        UNNotificationInterruptionLevel, UNNotificationPresentationOptionNone,
+        UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
+        UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
     };
 
     use crate::models::Timer;
@@ -466,8 +465,9 @@ mod platform {
 
     impl Handle {
         pub fn new() -> Result<Self> {
-            let mtm = MainThreadMarker::new()
-                .ok_or_else(|| anyhow::anyhow!("macOS notifications must initialize on the main thread"))?;
+            let mtm = MainThreadMarker::new().ok_or_else(|| {
+                anyhow::anyhow!("macOS notifications must initialize on the main thread")
+            })?;
             let center = UNUserNotificationCenter::currentNotificationCenter();
             install_timer_category(&center);
 
@@ -654,20 +654,21 @@ mod platform {
         let identifier = NSString::from_str(TIMER_NOTIFICATION_CATEGORY);
         let actions = NSArray::from_slice(&[]);
         let intents: Retained<NSArray<NSString>> = NSArray::from_slice(&[]);
-        let category = UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
-            &identifier,
-            &actions,
-            &intents,
-            UNNotificationCategoryOptions::CustomDismissAction,
-        );
+        let category =
+            UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
+                &identifier,
+                &actions,
+                &intents,
+                UNNotificationCategoryOptions::CustomDismissAction,
+            );
         let categories = NSSet::from_retained_slice(&[category]);
         center.setNotificationCategories(&categories);
     }
 
     fn handle_timer_response(response: &UNNotificationResponse) {
         let action = response.actionIdentifier();
-        let should_clear =
-            action == *UNNotificationDismissActionIdentifier || action == *UNNotificationDefaultActionIdentifier;
+        let should_clear = action == *UNNotificationDismissActionIdentifier
+            || action == *UNNotificationDefaultActionIdentifier;
         if !should_clear {
             return;
         }

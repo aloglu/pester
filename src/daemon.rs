@@ -59,12 +59,19 @@ pub(crate) fn tick_with_tray(
         store.save_state(&state)?;
     }
     let now = Local::now();
-    deliver_due_reminders(&config, &mut state, now, |reminder| notifier.send_reminder(reminder), |state| {
-        store.save_state(state)
-    })?;
-    deliver_due_timers(&mut state, now, |timer| notifier.send_timer(timer), |state| {
-        store.save_state(state)
-    })?;
+    deliver_due_reminders(
+        &config,
+        &mut state,
+        now,
+        |reminder| notifier.send_reminder(reminder),
+        |state| store.save_state(state),
+    )?;
+    deliver_due_timers(
+        &mut state,
+        now,
+        |timer| notifier.send_timer(timer),
+        |state| store.save_state(state),
+    )?;
     tray.refresh(&config, &state)
 }
 

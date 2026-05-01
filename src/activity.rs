@@ -52,7 +52,11 @@ impl RuntimeActivity {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        timers.sort_by(|left, right| left.ends_at.cmp(&right.ends_at).then_with(|| left.id.cmp(&right.id)));
+        timers.sort_by(|left, right| {
+            left.ends_at
+                .cmp(&right.ends_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
 
         let tray_state = if timers.iter().any(|timer| timer.expired) {
             TrayState::Alert
@@ -163,8 +167,8 @@ mod tests {
 
     #[test]
     fn hides_tray_when_nothing_is_active() {
-        let activity = RuntimeActivity::collect(&Config::default(), &State::default(), Local::now())
-            .unwrap();
+        let activity =
+            RuntimeActivity::collect(&Config::default(), &State::default(), Local::now()).unwrap();
 
         assert_eq!(activity.tray_state, TrayState::Hidden);
         assert!(activity.active_reminders.is_empty());
@@ -187,7 +191,10 @@ mod tests {
         assert_eq!(activity.tray_state, TrayState::Active);
         assert_eq!(activity.active_reminders.len(), 1);
         assert_eq!(activity.active_reminders[0].id, "winddown");
-        assert_eq!(activity.active_reminders[0].state, ReminderTrayState::ActiveWindow);
+        assert_eq!(
+            activity.active_reminders[0].state,
+            ReminderTrayState::ActiveWindow
+        );
     }
 
     #[test]
@@ -219,7 +226,10 @@ mod tests {
 
         assert_eq!(activity.tray_state, TrayState::Active);
         assert_eq!(activity.active_reminders.len(), 1);
-        assert_eq!(activity.active_reminders[0].state, ReminderTrayState::Scheduled);
+        assert_eq!(
+            activity.active_reminders[0].state,
+            ReminderTrayState::Scheduled
+        );
     }
 
     #[test]
