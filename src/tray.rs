@@ -106,6 +106,7 @@ mod platform {
         const ITEM_OBJECT_PATH: &str = "/StatusNotifierItem";
         const MENU_OBJECT_PATH: &str = "/StatusNotifierMenu";
         type Layout = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
+        type ToolTip = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
 
         pub struct LinuxTray {
             connection: Connection,
@@ -298,7 +299,7 @@ mod platform {
             }
 
             #[zbus(property)]
-            fn tool_tip(&self) -> (String, Vec<(i32, i32, Vec<u8>)>, String, String) {
+            fn tool_tip(&self) -> ToolTip {
                 let model = self.state.lock().expect("tray model lock poisoned");
                 (
                     self.icon_name(),
@@ -512,7 +513,7 @@ mod platform {
             )
         }
 
-        fn find_menu_item<'a>(item: &'a MenuItem, id: i32) -> Option<&'a MenuItem> {
+        fn find_menu_item(item: &MenuItem, id: i32) -> Option<&MenuItem> {
             if item.id == id {
                 return Some(item);
             }
