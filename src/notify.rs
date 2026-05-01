@@ -1,13 +1,21 @@
 use anyhow::Result;
 
-use crate::models::Reminder;
+use crate::models::{Reminder, Timer};
 
 pub fn send(reminder: &Reminder) -> Result<()> {
-    platform::send(reminder)
+    send_notification(&reminder.title, &reminder.message)
+}
+
+pub fn send_timer(timer: &Timer) -> Result<()> {
+    send_notification(&timer.title, &timer.message)
 }
 
 pub fn diagnostics() -> Vec<String> {
     platform::diagnostics()
+}
+
+fn send_notification(title: &str, message: &str) -> Result<()> {
+    platform::send(title, message)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -39,14 +47,18 @@ pub(crate) fn escape_xml_text(value: &str) -> String {
 #[cfg(target_os = "linux")]
 mod platform {
     use std::collections::HashMap;
+    use std::env;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
 
     use anyhow::{Context, Result};
     use zbus::blocking::Connection;
-    use zbus::zvariant::OwnedValue;
+    use zbus::zvariant::{OwnedValue, Str};
 
-    use crate::models::Reminder;
+    const CRITICAL_URGENCY: u8 = 2;
+    const REMINDER_SOUND_NAME: &str = "alarm-clock-elapsed";
 
-    pub fn send(reminder: &Reminder) -> Result<()> {
+    pub fn send(title: &str, message: &str) -> Result<()> {
         let connection = Connection::session()
             .context("could not connect to the user D-Bus session; desktop notifications may be unavailable in this environment")?;
         let proxy = zbus::blocking::Proxy::new(
@@ -56,9 +68,15 @@ mod platform {
             "org.freedesktop.Notifications",
         )
         .context("could not connect to the Freedesktop notification service")?;
+        let sound_support = notification_sound_support(&proxy).unwrap_or_else(|error| {
+            tracing::warn!("could not inspect notification capabilities: {error:#}");
+            SoundSupport::Unknown
+        });
 
         let actions: Vec<&str> = Vec::new();
-        let hints: HashMap<&str, OwnedValue> = HashMap::new();
+        let mut hints: HashMap<&str, OwnedValue> = HashMap::new();
+        hints.insert("urgency", CRITICAL_URGENCY.into());
+        hints.insert("sound-name", Str::from_static(REMINDER_SOUND_NAME).into());
         let timeout_ms = -1i32;
         let replaces_id = 0u32;
 
@@ -68,8 +86,8 @@ mod platform {
                 super::app_name(),
                 replaces_id,
                 "",
-                reminder.title.as_str(),
-                reminder.message.as_str(),
+                title,
+                message,
                 actions,
                 hints,
                 timeout_ms,
@@ -77,7 +95,16 @@ mod platform {
         );
 
         match result {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                if matches!(sound_support, SoundSupport::FallbackNeeded) {
+                    if let Err(error) = play_sound_fallback(title) {
+                        tracing::warn!(
+                            "could not play Linux notification sound fallback: {error:#}"
+                        );
+                    }
+                }
+                Ok(())
+            }
             Err(error) if is_service_unknown(&error) => Err(error).context(
                 "no Freedesktop notification service is registered on the user D-Bus session; WSL and headless Linux sessions usually need desktop notification forwarding or a notification daemon",
             ),
@@ -119,6 +146,8 @@ mod platform {
                 format!(
                     "notifications: available ({name} {version}, {vendor}, spec {spec_version})"
                 ),
+                capabilities_diagnostics(&proxy),
+                sound_diagnostics(&proxy),
             ],
             Err(error) => vec![
                 "D-Bus session: available".to_string(),
@@ -127,16 +156,113 @@ mod platform {
         }
     }
 
+    fn notification_sound_support(
+        proxy: &zbus::blocking::Proxy<'_>,
+    ) -> Result<SoundSupport, zbus::Error> {
+        let capabilities = notification_capabilities(proxy)?;
+        Ok(if supports_sound(&capabilities) {
+            SoundSupport::Native
+        } else {
+            SoundSupport::FallbackNeeded
+        })
+    }
+
+    fn notification_capabilities(
+        proxy: &zbus::blocking::Proxy<'_>,
+    ) -> Result<Vec<String>, zbus::Error> {
+        proxy.call("GetCapabilities", &())
+    }
+
+    pub(super) fn supports_sound(capabilities: &[String]) -> bool {
+        capabilities.iter().any(|capability| capability == "sound")
+    }
+
+    fn capabilities_diagnostics(proxy: &zbus::blocking::Proxy<'_>) -> String {
+        match notification_capabilities(proxy) {
+            Ok(capabilities) if capabilities.is_empty() => {
+                "notification capabilities: none".to_string()
+            }
+            Ok(capabilities) => format!("notification capabilities: {}", capabilities.join(", ")),
+            Err(error) => format!("notification capabilities: unknown ({error:#})"),
+        }
+    }
+
+    fn sound_diagnostics(proxy: &zbus::blocking::Proxy<'_>) -> String {
+        match notification_sound_support(proxy) {
+            Ok(SoundSupport::Native) => {
+                "notification sound: handled by the notification server".to_string()
+            }
+            Ok(SoundSupport::FallbackNeeded) => {
+                if has_canberra_gtk_play() {
+                    format!(
+                        "notification sound: using local fallback via canberra-gtk-play ({REMINDER_SOUND_NAME})"
+                    )
+                } else {
+                    format!(
+                        "notification sound: unavailable (server has no sound capability and canberra-gtk-play is not installed)"
+                    )
+                }
+            }
+            Ok(SoundSupport::Unknown) => "notification sound: unknown".to_string(),
+            Err(error) => format!("notification sound: unknown ({error:#})"),
+        }
+    }
+
+    fn play_sound_fallback(title: &str) -> Result<()> {
+        let canberra = find_canberra_gtk_play()
+            .context("notification server has no sound capability and canberra-gtk-play was not found in PATH")?;
+        let status = Command::new(canberra)
+            .args(["--id", REMINDER_SOUND_NAME, "--description", title])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("failed to start canberra-gtk-play")?;
+        if !status.success() {
+            anyhow::bail!("canberra-gtk-play exited with status {status}");
+        }
+        Ok(())
+    }
+
+    fn has_canberra_gtk_play() -> bool {
+        find_canberra_gtk_play().is_some()
+    }
+
+    fn find_canberra_gtk_play() -> Option<std::path::PathBuf> {
+        let path = env::var_os("PATH")?;
+        env::split_paths(&path)
+            .map(|dir| dir.join("canberra-gtk-play"))
+            .find(|candidate| candidate.is_file() && is_executable(candidate))
+    }
+
+    fn is_executable(path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
     fn is_service_unknown(error: &zbus::Error) -> bool {
         let message = error.to_string();
         message.contains("org.freedesktop.DBus.Error.ServiceUnknown")
             || message.contains("was not provided by any .service files")
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SoundSupport {
+        Native,
+        FallbackNeeded,
+        Unknown,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{app_id, app_name, escape_xml_text};
+
+    #[cfg(target_os = "linux")]
+    use super::platform::supports_sound;
 
     #[test]
     fn notification_app_name_is_stable() {
@@ -151,6 +277,22 @@ mod tests {
             "Wind &lt;down&gt; &amp; &quot;sleep&quot; &apos;now&apos;"
         );
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detects_notification_sound_capability() {
+        assert!(supports_sound(&["sound".to_string(), "body".to_string()]));
+        assert!(!supports_sound(&[
+            "body".to_string(),
+            "actions".to_string()
+        ]));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ignores_empty_capability_list_for_sound_support() {
+        assert!(!supports_sound(&[]));
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -164,23 +306,22 @@ mod platform {
     use objc2::runtime::Bool;
     use objc2_foundation::{NSError, NSString};
     use objc2_user_notifications::{
-        UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationRequest,
-        UNNotificationSound, UNUserNotificationCenter,
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotificationInterruptionLevel,
+        UNNotificationRequest, UNNotificationSound, UNUserNotificationCenter,
     };
 
-    use crate::models::Reminder;
-
-    pub fn send(reminder: &Reminder) -> Result<()> {
+    pub fn send(title: &str, message: &str) -> Result<()> {
         let center = UNUserNotificationCenter::currentNotificationCenter();
         request_authorization(&center)?;
 
         let content = UNMutableNotificationContent::new();
-        content.setTitle(&NSString::from_str(&reminder.title));
-        content.setBody(&NSString::from_str(&reminder.message));
+        content.setTitle(&NSString::from_str(title));
+        content.setBody(&NSString::from_str(message));
         let sound = UNNotificationSound::defaultSound();
         content.setSound(Some(&sound));
+        content.setInterruptionLevel(UNNotificationInterruptionLevel::TimeSensitive);
 
-        let identifier = NSString::from_str(&format!("pester-{}", reminder.id));
+        let identifier = NSString::from_str("pester-notification");
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
             &identifier,
             &content,
@@ -264,10 +405,8 @@ mod platform {
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 
-    use crate::models::Reminder;
-
-    pub fn send(reminder: &Reminder) -> Result<()> {
-        let document = toast_document(reminder)?;
+    pub fn send(title: &str, message: &str) -> Result<()> {
+        let document = toast_document(title, message)?;
         let notification = ToastNotification::CreateToastNotification(&document)
             .context("could not create Windows Toast notification")?;
         let notifier =
@@ -293,7 +432,7 @@ mod platform {
         ]
     }
 
-    fn toast_document(reminder: &Reminder) -> Result<XmlDocument> {
+    fn toast_document(title: &str, message: &str) -> Result<XmlDocument> {
         let xml = format!(
             r#"<toast>
   <visual>
@@ -303,8 +442,8 @@ mod platform {
     </binding>
   </visual>
 </toast>"#,
-            super::escape_xml_text(&reminder.title),
-            super::escape_xml_text(&reminder.message)
+            super::escape_xml_text(title),
+            super::escape_xml_text(message)
         );
         let document = XmlDocument::new().context("could not create Windows Toast XML document")?;
         document
@@ -319,9 +458,7 @@ mod platform {
     use anyhow::bail;
     use anyhow::Result;
 
-    use crate::models::Reminder;
-
-    pub fn send(_reminder: &Reminder) -> Result<()> {
+    pub fn send(_title: &str, _message: &str) -> Result<()> {
         bail!("notifications are only supported on Linux, macOS, and Windows")
     }
 

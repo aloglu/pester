@@ -107,6 +107,11 @@ pub enum Command {
     /// Send a test notification.
     #[command(override_usage = "pester test <ID> | --all")]
     Test(TargetArgs),
+    /// Start, list, or stop ad hoc timers.
+    #[command(
+        override_usage = "pester timer <ID> <DURATION> [--title <TITLE>] [--message <MESSAGE>] | list | stop <ID>"
+    )]
+    Timer(TimerArgs),
     /// Manage confirmation settings.
     Confirm {
         #[command(subcommand)]
@@ -133,6 +138,16 @@ pub struct TargetArgs {
     pub id: Option<String>,
     #[arg(long, conflicts_with = "id", help = "Target every reminder")]
     pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TimerArgs {
+    #[arg(value_name = "ARGS", required = true, num_args = 1..)]
+    pub args: Vec<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -243,6 +258,22 @@ mod tests {
                 "{command} should accept --all"
             );
         }
+    }
+
+    #[test]
+    fn timer_usage_shows_create_and_management_forms() {
+        let help = subcommand_help("timer");
+
+        assert!(help.contains(
+            "Usage: pester timer <ID> <DURATION> [--title <TITLE>] [--message <MESSAGE>] | list | stop <ID>"
+        ));
+    }
+
+    #[test]
+    fn timer_command_accepts_positional_arguments() {
+        assert!(Cli::try_parse_from(["pester", "timer", "tea", "25m"]).is_ok());
+        assert!(Cli::try_parse_from(["pester", "timer", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["pester", "timer", "stop", "tea"]).is_ok());
     }
 
     #[test]

@@ -52,6 +52,8 @@ pub struct Confirmation {
 pub struct State {
     #[serde(default)]
     pub days: BTreeMap<String, BTreeMap<String, ReminderDayState>>,
+    #[serde(default)]
+    pub timers: BTreeMap<String, Timer>,
 }
 
 impl State {
@@ -75,6 +77,24 @@ impl State {
 
     pub fn mark_undone(&mut self, date: NaiveDate, reminder_id: &str) {
         self.entry_mut(date, reminder_id).done = false;
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Timer {
+    pub id: String,
+    pub title: String,
+    pub message: String,
+    pub duration: String,
+    pub started_at: String,
+    pub ends_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expired_at: Option<String>,
+}
+
+impl Timer {
+    pub fn is_expired(&self) -> bool {
+        self.expired_at.is_some()
     }
 }
 
@@ -103,7 +123,7 @@ fn default_true() -> bool {
 mod tests {
     use chrono::NaiveDate;
 
-    use super::{Config, Reminder, State};
+    use super::{Config, Reminder, State, Timer};
 
     #[test]
     fn marks_individual_reminder_done_for_date() {
@@ -125,6 +145,13 @@ mod tests {
         state.mark_undone(date, "winddown");
 
         assert!(!state.get(date, "winddown").unwrap().done);
+    }
+
+    #[test]
+    fn deserializes_missing_timers_as_empty() {
+        let decoded: State = serde_json::from_str(r#"{"days":{}}"#).unwrap();
+
+        assert!(decoded.timers.is_empty());
     }
 
     #[test]
@@ -238,5 +265,28 @@ repeat_every = "5m"
             decoded.reminders[0].done_phrase.as_deref(),
             Some("I took my medication")
         );
+    }
+
+    #[test]
+    fn serializes_timers_in_state() {
+        let mut state = State::default();
+        state.timers.insert(
+            "tea".to_string(),
+            Timer {
+                id: "tea".to_string(),
+                title: "Tea".to_string(),
+                message: "Tea is ready.".to_string(),
+                duration: "25m".to_string(),
+                started_at: "2026-05-01T12:00:00+03:00".to_string(),
+                ends_at: "2026-05-01T12:25:00+03:00".to_string(),
+                expired_at: None,
+            },
+        );
+
+        let encoded = serde_json::to_string(&state).unwrap();
+        let decoded: State = serde_json::from_str(&encoded).unwrap();
+
+        assert!(encoded.contains("\"timers\""));
+        assert_eq!(decoded.timers["tea"].title, "Tea");
     }
 }

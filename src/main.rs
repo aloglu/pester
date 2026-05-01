@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
-use chrono::{Days, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Days, Local, NaiveDate, Timelike};
 use clap::Parser;
-use pester::cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs};
+use pester::cli::{Cli, Command, ConfirmCommand, SystemCommand, TargetArgs, TimerArgs};
 use pester::confirm::{confirm_delete, confirm_done, confirm_yes_no, done_phrase, read_phrase};
-use pester::models::{Reminder, State};
+use pester::models::{Reminder, State, Timer};
 use pester::schedule::{parse_repeat_interval, parse_time, parse_window_duration};
 use pester::store::Store;
 use pester::{daemon, notify, service, term, update, version};
@@ -80,6 +80,7 @@ fn main() -> Result<()> {
         Command::Enable(target) => set_enabled(&store, target, true),
         Command::Disable(target) => set_enabled(&store, target, false),
         Command::Test(target) => test(&store, target),
+        Command::Timer(args) => timer(&store, args),
         Command::Confirm { command } => match command {
             ConfirmCommand::Set { id, phrase } => set_done_phrase(&store, id, phrase),
             ConfirmCommand::Show { id } => show_done_phrase(&store, id),
@@ -549,6 +550,150 @@ fn test(store: &Store, target: TargetArgs) -> Result<()> {
     Ok(())
 }
 
+fn timer(store: &Store, args: TimerArgs) -> Result<()> {
+    match args.args.as_slice() {
+        [command] if command == "list" => {
+            reject_timer_creation_flags(&args)?;
+            list_timers(store)
+        }
+        [command, id] if command == "stop" => {
+            reject_timer_creation_flags(&args)?;
+            stop_timer(store, id)
+        }
+        [id, duration] => start_timer(store, id, duration, args.title, args.message),
+        _ => bail!(
+            "usage: pester timer <ID> <DURATION> [--title <TITLE>] [--message <MESSAGE>] | list | stop <ID>"
+        ),
+    }
+}
+
+fn reject_timer_creation_flags(args: &TimerArgs) -> Result<()> {
+    if args.title.is_some() || args.message.is_some() {
+        bail!("--title and --message are only valid when creating a timer");
+    }
+    Ok(())
+}
+
+fn start_timer(
+    store: &Store,
+    id: &str,
+    duration: &str,
+    title: Option<String>,
+    message: Option<String>,
+) -> Result<()> {
+    validate_named_id("timer", id)?;
+    let duration_value = parse_window_duration(duration)?;
+    let now = Local::now();
+    let ends_at = now
+        .checked_add_signed(
+            chrono::Duration::from_std(duration_value).context("timer duration is too large")?,
+        )
+        .context("timer end time is out of range")?;
+
+    let mut state = store.load_state()?;
+    if state.timers.contains_key(id) {
+        bail!("timer \"{id}\" already exists");
+    }
+
+    let title = title.unwrap_or_else(|| id.to_string());
+    let message = message.unwrap_or_else(|| "Timer finished.".to_string());
+    state.timers.insert(
+        id.to_string(),
+        Timer {
+            id: id.to_string(),
+            title: title.clone(),
+            message,
+            duration: duration.to_string(),
+            started_at: now.to_rfc3339(),
+            ends_at: ends_at.to_rfc3339(),
+            expired_at: None,
+        },
+    );
+    store.save_state(&state)?;
+
+    term::ok(format!(
+        "Started timer \"{id}\" for {}.",
+        humantime::format_duration(duration_value)
+    ));
+    term::detail(format!(
+        "Ends at {}.",
+        ends_at.format("%Y-%m-%d %H:%M:%S %Z")
+    ));
+    if title != id {
+        term::detail(format!("Title: {title}"));
+    }
+    Ok(())
+}
+
+fn list_timers(store: &Store) -> Result<()> {
+    let state = store.load_state()?;
+    term::heading("Timers");
+    if state.timers.is_empty() {
+        term::warn("No timers running.");
+        return Ok(());
+    }
+
+    let now = Local::now();
+    for timer in state.timers.values() {
+        println!();
+        println!("{}", term::bold(&timer.id));
+        let status = if timer.is_expired() {
+            term::yellow("expired")
+        } else {
+            term::green("running")
+        };
+        term::key_value("status", status);
+        term::key_value("title", &timer.title);
+        term::key_value("duration", &timer.duration);
+        term::key_value("ends", timer.ends_at_display()?);
+        term::key_value("remaining", timer.remaining_display(now)?);
+    }
+    Ok(())
+}
+
+fn stop_timer(store: &Store, id: &str) -> Result<()> {
+    let mut state = store.load_state()?;
+    if state.timers.remove(id).is_none() {
+        bail!("timer \"{id}\" does not exist");
+    }
+    store.save_state(&state)?;
+    term::ok(format!("Stopped timer \"{id}\"."));
+    Ok(())
+}
+
+trait TimerDisplayExt {
+    fn ends_at_display(&self) -> Result<String>;
+    fn remaining_display(&self, now: DateTime<Local>) -> Result<String>;
+}
+
+impl TimerDisplayExt for Timer {
+    fn ends_at_display(&self) -> Result<String> {
+        Ok(parse_rfc3339_local(&self.ends_at)?
+            .format("%Y-%m-%d %H:%M:%S %Z")
+            .to_string())
+    }
+
+    fn remaining_display(&self, now: DateTime<Local>) -> Result<String> {
+        if self.is_expired() {
+            return Ok("expired".to_string());
+        }
+
+        let ends_at = parse_rfc3339_local(&self.ends_at)?;
+        let remaining = ends_at
+            .signed_duration_since(now)
+            .to_std()
+            .unwrap_or_default();
+        let rounded = std::time::Duration::from_secs(remaining.as_secs());
+        Ok(humantime::format_duration(rounded).to_string())
+    }
+}
+
+fn parse_rfc3339_local(value: &str) -> Result<DateTime<Local>> {
+    Ok(DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("invalid timestamp: {value}"))?
+        .with_timezone(&Local))
+}
+
 fn set_done_phrase(store: &Store, id: Option<String>, phrase: Option<String>) -> Result<()> {
     let mut config = store.load_config()?;
     if let Some(id) = id.as_deref() {
@@ -708,6 +853,10 @@ fn show_version() -> Result<()> {
 }
 
 pub(crate) fn validate_id(id: &str) -> Result<()> {
+    validate_named_id("reminder", id)
+}
+
+pub(crate) fn validate_named_id(kind: &str, id: &str) -> Result<()> {
     const RESERVED: &[&str] = &[
         "all",
         "add",
@@ -726,6 +875,7 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
         "status",
         "system",
         "test",
+        "timer",
         "undone",
         "uninstall",
         "update",
@@ -733,16 +883,16 @@ pub(crate) fn validate_id(id: &str) -> Result<()> {
     ];
 
     if RESERVED.contains(&id) {
-        bail!("\"{id}\" is reserved and cannot be used as a reminder id");
+        bail!("\"{id}\" is reserved and cannot be used as a {kind} id");
     }
     if id.trim() != id || id.is_empty() {
-        bail!("reminder id cannot be empty or contain leading/trailing whitespace");
+        bail!("{kind} id cannot be empty or contain leading/trailing whitespace");
     }
     if !id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        bail!("reminder id may only contain letters, numbers, hyphens, and underscores");
+        bail!("{kind} id may only contain letters, numbers, hyphens, and underscores");
     }
     Ok(())
 }

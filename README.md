@@ -110,6 +110,14 @@ Update to the latest release:
 pester update
 ```
 
+Start an ad hoc timer:
+
+```sh
+pester timer tea 25m --title "Tea is ready"
+pester timer list
+pester timer stop tea
+```
+
 Send a test notification:
 
 ```sh
@@ -208,6 +216,12 @@ done after midnight stops the reminder until the next 23:50 window.
 
 pester uses the Freedesktop notification service over the user D-Bus session.
 It does not shell out to `notify-send`.
+It marks reminder notifications as critical urgency and requests the native
+`alarm-clock-elapsed` notification sound when the desktop environment supports
+it.
+If the active notification server does not advertise sound support and
+`canberra-gtk-play` is available, pester falls back to local playback for the
+same sound event.
 
 The installer creates a user-level systemd service:
 
@@ -228,6 +242,8 @@ notification daemon such as `dunst` or `mako`.
 ### macOS
 
 pester uses the UserNotifications framework.
+Reminder notifications use the default notification sound and a time-sensitive
+interruption level.
 
 pester currently ships for Apple Silicon macOS only.
 

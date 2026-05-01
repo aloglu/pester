@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Days, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
-use crate::models::{Config, Reminder, State};
+use crate::models::{Config, Reminder, State, Timer};
 use crate::notify;
 use crate::schedule::{parse_repeat_interval, parse_window_duration};
 use crate::store::Store;
@@ -38,6 +38,9 @@ fn tick(store: &Store) -> Result<()> {
     let mut state = store.load_state()?;
     let now = Local::now();
     deliver_due_reminders(&config, &mut state, now, notify::send, |state| {
+        store.save_state(state)
+    })?;
+    deliver_due_timers(&mut state, now, notify::send_timer, |state| {
         store.save_state(state)
     })
 }
@@ -98,6 +101,49 @@ pub(crate) fn due_reminders(
         let last_notified_at = today_state.and_then(|entry| entry.last_notified_at.as_deref());
         if should_notify(reminder, last_notified_at, now)? {
             due.push(reminder.id.clone());
+        }
+    }
+
+    Ok(due)
+}
+
+fn deliver_due_timers<F, S>(
+    state: &mut State,
+    now: DateTime<Local>,
+    mut notify: F,
+    mut save_state: S,
+) -> Result<()>
+where
+    F: FnMut(&Timer) -> Result<()>,
+    S: FnMut(&State) -> Result<()>,
+{
+    for timer_id in due_timers(state, now)? {
+        let timer = state
+            .timers
+            .get(&timer_id)
+            .cloned()
+            .with_context(|| format!("timer \"{timer_id}\" disappeared during tick"))?;
+        notify(&timer).with_context(|| format!("failed to send notification for {}", timer.id))?;
+        state
+            .timers
+            .get_mut(&timer_id)
+            .expect("timer was present earlier in the tick")
+            .expired_at = Some(now.to_rfc3339());
+        save_state(state)?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn due_timers(state: &State, now: DateTime<Local>) -> Result<Vec<String>> {
+    let mut due = Vec::new();
+
+    for timer in state.timers.values() {
+        if timer.is_expired() {
+            continue;
+        }
+        if parse_timer_end(timer)?.signed_duration_since(now) <= chrono::Duration::zero() {
+            due.push(timer.id.clone());
         }
     }
 
@@ -210,16 +256,22 @@ fn duration_until_next_second(now: DateTime<Local>) -> Duration {
     }
 }
 
+fn parse_timer_end(timer: &Timer) -> Result<DateTime<Local>> {
+    Ok(DateTime::parse_from_rfc3339(&timer.ends_at)
+        .with_context(|| format!("invalid timer end timestamp for {}", timer.id))?
+        .with_timezone(&Local))
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::bail;
-    use chrono::{Local, TimeZone, Timelike};
+    use chrono::{DateTime, Local, TimeZone, Timelike};
 
     use super::{
-        deliver_due_reminders, due_reminders, duration_until_next_second, is_due, should_notify,
-        state_date_for_now,
+        deliver_due_reminders, deliver_due_timers, due_reminders, due_timers,
+        duration_until_next_second, is_due, should_notify, state_date_for_now,
     };
-    use crate::models::{Config, Reminder, State};
+    use crate::models::{Config, Reminder, State, Timer};
 
     fn reminder(time: &str, repeat_every: &str) -> Reminder {
         Reminder {
@@ -257,6 +309,21 @@ mod tests {
         Config {
             reminders,
             confirmation: Default::default(),
+        }
+    }
+
+    fn timer(id: &str, ends_at: DateTime<Local>) -> Timer {
+        Timer {
+            id: id.to_string(),
+            title: id.to_string(),
+            message: "Done".to_string(),
+            duration: "25m".to_string(),
+            started_at: ends_at
+                .checked_sub_signed(chrono::Duration::minutes(25))
+                .unwrap()
+                .to_rfc3339(),
+            ends_at: ends_at.to_rfc3339(),
+            expired_at: None,
         }
     }
 
@@ -556,5 +623,53 @@ mod tests {
             duration_until_next_second(now),
             std::time::Duration::from_secs(1)
         );
+    }
+
+    #[test]
+    fn due_timers_includes_unexpired_elapsed_timer() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 12, 25, 0).unwrap();
+        let mut state = State::default();
+        state.timers.insert(
+            "tea".to_string(),
+            timer("tea", now - chrono::Duration::seconds(1)),
+        );
+
+        assert_eq!(due_timers(&state, now).unwrap(), vec!["tea".to_string()]);
+    }
+
+    #[test]
+    fn due_timers_skips_expired_timer() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 12, 25, 0).unwrap();
+        let mut state = State::default();
+        let mut finished = timer("tea", now - chrono::Duration::seconds(1));
+        finished.expired_at = Some(now.to_rfc3339());
+        state.timers.insert("tea".to_string(), finished);
+
+        assert!(due_timers(&state, now).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deliver_due_timers_marks_timer_expired() {
+        let now = Local.with_ymd_and_hms(2026, 4, 21, 12, 25, 0).unwrap();
+        let mut state = State::default();
+        state.timers.insert(
+            "tea".to_string(),
+            timer("tea", now - chrono::Duration::seconds(1)),
+        );
+
+        let mut notified = Vec::new();
+        deliver_due_timers(
+            &mut state,
+            now,
+            |timer| {
+                notified.push(timer.id.clone());
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(notified, vec!["tea".to_string()]);
+        assert!(state.timers["tea"].expired_at.is_some());
     }
 }
