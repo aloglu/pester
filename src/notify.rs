@@ -198,9 +198,7 @@ mod platform {
                         "notification sound: using local fallback via canberra-gtk-play ({REMINDER_SOUND_NAME})"
                     )
                 } else {
-                    format!(
-                        "notification sound: unavailable (server has no sound capability and canberra-gtk-play is not installed)"
-                    )
+                    "notification sound: unavailable (server has no sound capability and canberra-gtk-play is not installed)".to_string()
                 }
             }
             Ok(SoundSupport::Unknown) => "notification sound: unknown".to_string(),
