@@ -15,13 +15,13 @@ pub enum TrayState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeActivity {
     pub tray_state: TrayState,
-    pub active_reminders: Vec<ActiveReminder>,
+    pub tray_reminders: Vec<TrayReminder>,
     pub timers: Vec<ActiveTimer>,
 }
 
 impl RuntimeActivity {
     pub fn collect(config: &Config, state: &State, now: DateTime<Local>) -> Result<Self> {
-        let mut active_reminders = Vec::new();
+        let mut tray_reminders = Vec::new();
         for reminder in config.reminders.iter().filter(|reminder| reminder.enabled) {
             let active_window = daemon::active_window(reminder, now)?;
             let state_date = daemon::state_date_for_now(reminder, now)?;
@@ -30,7 +30,7 @@ impl RuntimeActivity {
             let (next_state, next_change_at) =
                 reminder_tray_state(reminder, now, active_window, done)?;
 
-            active_reminders.push(ActiveReminder {
+            tray_reminders.push(TrayReminder {
                 id: reminder.id.clone(),
                 title: reminder.title.clone(),
                 state: next_state,
@@ -60,7 +60,7 @@ impl RuntimeActivity {
 
         let tray_state = if timers.iter().any(|timer| timer.expired) {
             TrayState::Alert
-        } else if !timers.is_empty() || !active_reminders.is_empty() {
+        } else if !timers.is_empty() || !tray_reminders.is_empty() {
             TrayState::Active
         } else {
             TrayState::Hidden
@@ -68,14 +68,14 @@ impl RuntimeActivity {
 
         Ok(Self {
             tray_state,
-            active_reminders,
+            tray_reminders,
             timers,
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveReminder {
+pub struct TrayReminder {
     pub id: String,
     pub title: String,
     pub state: ReminderTrayState,
@@ -171,7 +171,7 @@ mod tests {
             RuntimeActivity::collect(&Config::default(), &State::default(), Local::now()).unwrap();
 
         assert_eq!(activity.tray_state, TrayState::Hidden);
-        assert!(activity.active_reminders.is_empty());
+        assert!(activity.tray_reminders.is_empty());
         assert!(activity.timers.is_empty());
     }
 
@@ -189,10 +189,10 @@ mod tests {
         let activity = RuntimeActivity::collect(&config, &State::default(), now).unwrap();
 
         assert_eq!(activity.tray_state, TrayState::Active);
-        assert_eq!(activity.active_reminders.len(), 1);
-        assert_eq!(activity.active_reminders[0].id, "winddown");
+        assert_eq!(activity.tray_reminders.len(), 1);
+        assert_eq!(activity.tray_reminders[0].id, "winddown");
         assert_eq!(
-            activity.active_reminders[0].state,
+            activity.tray_reminders[0].state,
             ReminderTrayState::ActiveWindow
         );
     }
@@ -225,9 +225,9 @@ mod tests {
         let activity = RuntimeActivity::collect(&config, &state, now).unwrap();
 
         assert_eq!(activity.tray_state, TrayState::Active);
-        assert_eq!(activity.active_reminders.len(), 1);
+        assert_eq!(activity.tray_reminders.len(), 1);
         assert_eq!(
-            activity.active_reminders[0].state,
+            activity.tray_reminders[0].state,
             ReminderTrayState::Scheduled
         );
     }

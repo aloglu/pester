@@ -29,19 +29,17 @@ impl Handle {
 }
 
 pub fn send(reminder: &Reminder) -> Result<()> {
-    send_notification(&reminder.title, &reminder.message)
+    let mut handle = Handle::new()?;
+    handle.send_reminder(reminder)
 }
 
 pub fn send_timer(timer: &Timer) -> Result<()> {
-    send_notification(&timer.title, &timer.message)
+    let mut handle = Handle::new()?;
+    handle.send_timer(timer)
 }
 
 pub fn diagnostics() -> Vec<String> {
     platform::diagnostics()
-}
-
-fn send_notification(title: &str, message: &str) -> Result<()> {
-    platform::send(title, message)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -148,24 +146,6 @@ mod platform {
             }
             dismissed
         }
-    }
-
-    pub fn send(title: &str, message: &str) -> Result<()> {
-        let connection = zbus::blocking::Connection::session().context(
-            "could not connect to the user D-Bus session; desktop notifications may be unavailable in this environment",
-        )?;
-        let proxy = notifications_proxy(&connection)?;
-        let sound_support = notification_sound_support(&proxy).unwrap_or_else(|error| {
-            tracing::warn!("could not inspect notification capabilities: {error:#}");
-            SoundSupport::Unknown
-        });
-        send_via_proxy(&proxy, title, message)?;
-        if matches!(sound_support, SoundSupport::FallbackNeeded) {
-            if let Err(error) = play_sound_fallback(title) {
-                tracing::warn!("could not play Linux notification sound fallback: {error:#}");
-            }
-        }
-        Ok(())
     }
 
     fn send_via_proxy(proxy: &Proxy<'_>, title: &str, message: &str) -> Result<u32> {
@@ -540,7 +520,7 @@ mod platform {
         }
     }
 
-    pub fn send(title: &str, message: &str) -> Result<()> {
+    fn send(title: &str, message: &str) -> Result<()> {
         let center = UNUserNotificationCenter::currentNotificationCenter();
         request_authorization(&center)?;
 
@@ -729,7 +709,7 @@ mod platform {
         }
     }
 
-    pub fn send(title: &str, message: &str) -> Result<()> {
+    fn send(title: &str, message: &str) -> Result<()> {
         let document = toast_document(title, message)?;
         let notification = ToastNotification::CreateToastNotification(&document)
             .context("could not create Windows Toast notification")?;

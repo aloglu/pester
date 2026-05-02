@@ -3,7 +3,7 @@ use directories::ProjectDirs;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::activity::RuntimeActivity;
+use crate::activity::{ReminderTrayState, RuntimeActivity, TrayReminder};
 use crate::models::{Config, State};
 use crate::store::Store;
 
@@ -45,6 +45,76 @@ fn ensure_embedded_tray_icon() -> Result<PathBuf> {
         fs::write(&icon_path, TRAY_ICON_SVG)?;
     }
     Ok(icon_path)
+}
+
+fn reminder_section_title() -> &'static str {
+    "Reminders"
+}
+
+fn timer_tooltip_line(timer: &crate::activity::ActiveTimer) -> String {
+    let detail = if timer.expired {
+        "expired".to_string()
+    } else {
+        format!("{} left", remaining_string(timer.ends_at))
+    };
+    format!("Timer: {} ({detail})", timer.title)
+}
+
+fn reminder_tooltip_line(reminder: &TrayReminder) -> String {
+    let detail = match reminder.state {
+        ReminderTrayState::ActiveWindow => {
+            format!("active until {}", reminder.relevant_at.format("%H:%M"))
+        }
+        ReminderTrayState::Scheduled => {
+            format!("next in {}", remaining_string(reminder.relevant_at))
+        }
+    };
+    format!("Reminder: {} ({detail})", reminder.title)
+}
+
+fn reminder_menu_label(reminder: &TrayReminder) -> String {
+    match reminder.state {
+        ReminderTrayState::ActiveWindow => format!(
+            "{}: active until {}",
+            reminder.title,
+            reminder.relevant_at.format("%H:%M")
+        ),
+        ReminderTrayState::Scheduled => format!(
+            "{}: next in {}",
+            reminder.title,
+            remaining_string(reminder.relevant_at)
+        ),
+    }
+}
+
+fn activity_tooltip_lines(activity: &RuntimeActivity) -> Vec<String> {
+    let mut lines = Vec::new();
+    for timer in &activity.timers {
+        lines.push(timer_tooltip_line(timer));
+    }
+    for reminder in &activity.tray_reminders {
+        lines.push(reminder_tooltip_line(reminder));
+    }
+    lines
+}
+
+fn remaining_string(ends_at: chrono::DateTime<chrono::Local>) -> String {
+    let remaining = ends_at.signed_duration_since(chrono::Local::now());
+    if remaining.num_seconds() <= 0 {
+        return "expired".to_string();
+    }
+    let total_seconds = remaining.num_seconds();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    if minutes >= 60 {
+        let hours = minutes / 60;
+        let remainder_minutes = minutes % 60;
+        format!("{hours}h {remainder_minutes:02}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -91,10 +161,13 @@ mod platform {
         use zbus::object_server::SignalContext;
         use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
-        use crate::activity::{ReminderTrayState, RuntimeActivity, TrayState};
+        use crate::activity::{RuntimeActivity, TrayState};
         use crate::models::{Config, State};
 
-        use super::super::{runtime_activity, Tray};
+        use super::super::{
+            activity_tooltip_lines, remaining_string, reminder_menu_label, reminder_section_title,
+            runtime_activity, Tray,
+        };
 
         const WATCHERS: &[(&str, &str)] = &[
             ("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher"),
@@ -245,7 +318,7 @@ mod platform {
                 Self {
                     activity: RuntimeActivity {
                         tray_state: TrayState::Hidden,
-                        active_reminders: Vec::new(),
+                        tray_reminders: Vec::new(),
                         timers: Vec::new(),
                     },
                     revision: 1,
@@ -438,26 +511,7 @@ mod platform {
         }
 
         fn tooltip_text(activity: &RuntimeActivity) -> String {
-            let mut lines = Vec::new();
-            for timer in &activity.timers {
-                let detail = if timer.expired {
-                    "expired".to_string()
-                } else {
-                    format!("{} left", remaining_string(timer.ends_at))
-                };
-                lines.push(format!("Timer: {} ({detail})", timer.title));
-            }
-            for reminder in &activity.active_reminders {
-                let detail = match reminder.state {
-                    ReminderTrayState::ActiveWindow => {
-                        format!("active until {}", reminder.relevant_at.format("%H:%M"))
-                    }
-                    ReminderTrayState::Scheduled => {
-                        format!("next in {}", remaining_string(reminder.relevant_at))
-                    }
-                };
-                lines.push(format!("Reminder: {} ({detail})", reminder.title));
-            }
+            let lines = activity_tooltip_lines(activity);
             if lines.is_empty() {
                 "No active timers or reminders".to_string()
             } else {
@@ -541,25 +595,17 @@ mod platform {
                 next_id += 1;
             }
 
-            if !activity.active_reminders.is_empty() {
+            if !activity.tray_reminders.is_empty() {
                 let mut reminder_children = Vec::new();
-                for reminder in &activity.active_reminders {
-                    let label = match reminder.state {
-                        ReminderTrayState::ActiveWindow => format!(
-                            "{}: active until {}",
-                            reminder.title,
-                            reminder.relevant_at.format("%H:%M")
-                        ),
-                        ReminderTrayState::Scheduled => format!(
-                            "{}: next in {}",
-                            reminder.title,
-                            remaining_string(reminder.relevant_at)
-                        ),
-                    };
-                    reminder_children.push(leaf_item(next_id, &label));
+                for reminder in &activity.tray_reminders {
+                    reminder_children.push(leaf_item(next_id, &reminder_menu_label(reminder)));
                     next_id += 1;
                 }
-                items.push(section_item(next_id, "Active reminders", reminder_children));
+                items.push(section_item(
+                    next_id,
+                    reminder_section_title(),
+                    reminder_children,
+                ));
             }
 
             if items.is_empty() {
@@ -642,26 +688,6 @@ mod platform {
         fn stable_linux_icon_name() -> &'static str {
             crate::tray::TRAY_ICON_NAME
         }
-
-        fn remaining_string(ends_at: chrono::DateTime<chrono::Local>) -> String {
-            let remaining = ends_at.signed_duration_since(chrono::Local::now());
-            if remaining.num_seconds() <= 0 {
-                return "expired".to_string();
-            }
-            let total_seconds = remaining.num_seconds();
-            let minutes = total_seconds / 60;
-            let seconds = total_seconds % 60;
-            if minutes >= 60 {
-                let hours = minutes / 60;
-                let remainder_minutes = minutes % 60;
-                format!("{hours}h {remainder_minutes:02}m")
-            } else if minutes > 0 {
-                format!("{minutes}m {seconds:02}s")
-            } else {
-                format!("{seconds}s")
-            }
-        }
-
         #[cfg(test)]
         mod tests {
             use chrono::{Duration, Local, TimeZone};
@@ -671,7 +697,7 @@ mod platform {
                 tray_status_name,
             };
             use crate::activity::{
-                ActiveReminder, ActiveTimer, ReminderTrayState, RuntimeActivity, TrayState,
+                ActiveTimer, ReminderTrayState, RuntimeActivity, TrayReminder, TrayState,
             };
 
             fn sample_activity() -> RuntimeActivity {
@@ -695,7 +721,7 @@ mod platform {
                             expired: true,
                         },
                     ],
-                    active_reminders: vec![ActiveReminder {
+                    tray_reminders: vec![TrayReminder {
                         id: "stretch".to_string(),
                         title: "Stretch".to_string(),
                         state: ReminderTrayState::Scheduled,
@@ -730,13 +756,22 @@ mod platform {
                 assert_eq!(children_display, "submenu");
                 assert_eq!(items[0].children.len(), 2);
                 assert_eq!(items[1].children.len(), 1);
+                let reminder_label: String = items[1]
+                    .properties
+                    .get("label")
+                    .expect("reminder section label")
+                    .try_clone()
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                assert_eq!(reminder_label, "Reminders");
             }
 
             #[test]
             fn menu_falls_back_to_single_empty_row_when_idle() {
                 let items = menu_items(&RuntimeActivity {
                     tray_state: TrayState::Hidden,
-                    active_reminders: Vec::new(),
+                    tray_reminders: Vec::new(),
                     timers: Vec::new(),
                 });
 
@@ -788,8 +823,6 @@ mod platform {
 #[cfg(target_os = "macos")]
 mod platform {
     use anyhow::{Context, Result};
-    use chrono::Local;
-    use objc2::encode::{Encode, Encoding, RefEncode};
     use objc2::rc::Retained;
     use objc2::{extern_class, extern_conformance, extern_methods, MainThreadOnly};
     use objc2_foundation::{
@@ -797,28 +830,15 @@ mod platform {
         NSObjectProtocol, NSRunLoop, NSString,
     };
 
-    use crate::activity::{ReminderTrayState, RuntimeActivity, TrayState};
+    use crate::activity::RuntimeActivity;
     use crate::store::Store;
 
-    use super::{runtime_activity, NoopTray, Tray};
+    use super::{
+        activity_tooltip_lines, remaining_string, reminder_menu_label, reminder_section_title,
+        runtime_activity, NoopTray, Tray,
+    };
 
     const NS_VARIABLE_STATUS_ITEM_LENGTH: f64 = -1.0;
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    struct NSApplicationActivationPolicy(NSInteger);
-
-    impl NSApplicationActivationPolicy {
-        const ACCESSORY: Self = Self(1);
-    }
-
-    unsafe impl Encode for NSApplicationActivationPolicy {
-        const ENCODING: Encoding = NSInteger::ENCODING;
-    }
-
-    unsafe impl RefEncode for NSApplicationActivationPolicy {
-        const ENCODING_REF: Encoding = Encoding::Pointer(&Self::ENCODING);
-    }
 
     extern_class!(
         #[unsafe(super(NSObject))]
@@ -839,8 +859,7 @@ mod platform {
 
             #[unsafe(method(setActivationPolicy:))]
             #[unsafe(method_family = none)]
-            fn setActivationPolicy(&self, activation_policy: NSApplicationActivationPolicy)
-                -> bool;
+            fn setActivationPolicy(&self, activation_policy: NSInteger) -> bool;
         );
     }
 
@@ -1013,7 +1032,7 @@ mod platform {
     impl MacTray {
         fn new(mtm: MainThreadMarker) -> Result<Self> {
             let app = NSApplication::sharedApplication(mtm);
-            let _ = app.setActivationPolicy(NSApplicationActivationPolicy::ACCESSORY);
+            let _ = app.setActivationPolicy(1);
 
             let status_bar = NSStatusBar::systemStatusBar(mtm);
             let status_item = status_bar.statusItemWithLength(NS_VARIABLE_STATUS_ITEM_LENGTH);
@@ -1100,7 +1119,7 @@ mod platform {
             let item = label_menu_item(mtm, &title, true);
             menu.addItem(&item);
         }
-        if !activity.timers.is_empty() && !activity.active_reminders.is_empty() {
+        if !activity.timers.is_empty() && !activity.tray_reminders.is_empty() {
             let separator = NSMenuItem::separatorItem();
             menu.addItem(&separator);
         }
@@ -1117,27 +1136,15 @@ mod platform {
                 menu.addItem(&item);
             }
         }
-        if !activity.active_reminders.is_empty() {
+        if !activity.tray_reminders.is_empty() {
             if !activity.timers.is_empty() {
                 let separator = NSMenuItem::separatorItem();
                 menu.addItem(&separator);
             }
-            let header = label_menu_item(mtm, "Active reminders", true);
+            let header = label_menu_item(mtm, reminder_section_title(), true);
             menu.addItem(&header);
-            for reminder in &activity.active_reminders {
-                let label = match reminder.state {
-                    ReminderTrayState::ActiveWindow => format!(
-                        "{}: active until {}",
-                        reminder.title,
-                        reminder.relevant_at.format("%H:%M")
-                    ),
-                    ReminderTrayState::Scheduled => format!(
-                        "{}: next in {}",
-                        reminder.title,
-                        remaining_string(reminder.relevant_at)
-                    ),
-                };
-                let item = label_menu_item(mtm, &label, false);
+            for reminder in &activity.tray_reminders {
+                let item = label_menu_item(mtm, &reminder_menu_label(reminder), false);
                 menu.addItem(&item);
             }
         }
@@ -1170,10 +1177,7 @@ mod platform {
             running_timers,
             expired_timers
         ));
-        lines.push(format!(
-            "{} active reminder(s)",
-            activity.active_reminders.len()
-        ));
+        lines.push(format!("{} reminder(s)", activity.tray_reminders.len()));
         lines
     }
 
@@ -1186,61 +1190,11 @@ mod platform {
     }
 
     fn status_tooltip(activity: &RuntimeActivity) -> String {
-        let timers = activity
-            .timers
-            .iter()
-            .map(|timer| {
-                if timer.expired {
-                    format!("{}: expired", timer.title)
-                } else {
-                    format!("{}: {}", timer.title, remaining_string(timer.ends_at))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if timers.is_empty() {
-            if activity.active_reminders.is_empty() {
-                "No active timers or reminders".to_string()
-            } else {
-                activity
-                    .active_reminders
-                    .iter()
-                    .map(|reminder| match reminder.state {
-                        ReminderTrayState::ActiveWindow => format!(
-                            "{}: active until {}",
-                            reminder.title,
-                            reminder.relevant_at.format("%H:%M")
-                        ),
-                        ReminderTrayState::Scheduled => format!(
-                            "{}: next in {}",
-                            reminder.title,
-                            remaining_string(reminder.relevant_at)
-                        ),
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+        let lines = activity_tooltip_lines(activity);
+        if lines.is_empty() {
+            "No active timers or reminders".to_string()
         } else {
-            timers.join("\n")
-        }
-    }
-
-    fn remaining_string(ends_at: chrono::DateTime<Local>) -> String {
-        let remaining = ends_at.signed_duration_since(Local::now());
-        if remaining.num_seconds() <= 0 {
-            return "expired".to_string();
-        }
-        let total_seconds = remaining.num_seconds();
-        let minutes = total_seconds / 60;
-        let seconds = total_seconds % 60;
-        if minutes >= 60 {
-            let hours = minutes / 60;
-            let remainder_minutes = minutes % 60;
-            format!("{hours}h {remainder_minutes:02}m")
-        } else if minutes > 0 {
-            format!("{minutes}m {seconds:02}s")
-        } else {
-            format!("{seconds}s")
+            lines.join("\n")
         }
     }
 }

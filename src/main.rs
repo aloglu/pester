@@ -851,9 +851,9 @@ fn system_status(store: &Store, verbose: bool) -> Result<()> {
                 TrayState::Alert => "alert",
             },
         );
-        term::key_value("active reminders", activity.active_reminders.len());
+        term::key_value("tray reminders", activity.tray_reminders.len());
         term::key_value("timers", activity.timers.len());
-        for reminder in activity.active_reminders {
+        for reminder in activity.tray_reminders {
             let detail = match reminder.state {
                 ReminderTrayState::ActiveWindow => format!(
                     "active until {}",
