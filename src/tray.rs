@@ -830,7 +830,7 @@ mod platform {
         NSObjectProtocol, NSRunLoop, NSString,
     };
 
-    use crate::activity::RuntimeActivity;
+    use crate::activity::{RuntimeActivity, TrayState};
     use crate::store::Store;
 
     use super::{
