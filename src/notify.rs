@@ -666,8 +666,9 @@ mod platform {
 
     fn handle_timer_response(response: &UNNotificationResponse) {
         let action = response.actionIdentifier();
-        let should_clear = action.as_ref() == UNNotificationDismissActionIdentifier
-            || action.as_ref() == UNNotificationDefaultActionIdentifier;
+        let action: &NSString = &action;
+        let should_clear = action == UNNotificationDismissActionIdentifier
+            || action == UNNotificationDefaultActionIdentifier;
         if !should_clear {
             return;
         }
