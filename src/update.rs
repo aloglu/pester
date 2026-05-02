@@ -218,15 +218,30 @@ mod platform {
             .parent()
             .with_context(|| format!("{} has no parent directory", destination.display()))?;
         fs::create_dir_all(parent)?;
-        fs::copy(source, destination).with_context(|| {
+        let staged = staged_path(destination);
+        if staged.exists() {
+            let _ = fs::remove_file(&staged);
+        }
+        fs::copy(source, &staged).with_context(|| {
             format!(
                 "failed to copy {} to {}",
                 source.display(),
-                destination.display()
+                staged.display()
             )
         })?;
-        make_executable(destination)?;
+        make_executable(&staged)?;
+        fs::rename(&staged, destination).with_context(|| {
+            format!(
+                "failed to replace {} with {}",
+                destination.display(),
+                staged.display()
+            )
+        })?;
         Ok(())
+    }
+
+    fn staged_path(destination: &Path) -> PathBuf {
+        destination.with_extension("new")
     }
 
     fn install_app_bundle(source: &Path, destination: &Path) -> Result<()> {
@@ -330,7 +345,9 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
-        use super::artifact_name_for;
+        use super::{artifact_name_for, install_binary};
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         #[test]
         fn selects_linux_artifacts() {
@@ -356,6 +373,29 @@ mod platform {
         fn rejects_unsupported_targets() {
             assert!(artifact_name_for("macos", "x86_64").is_err());
             assert!(artifact_name_for("linux", "sparc").is_err());
+        }
+
+        #[test]
+        fn installs_binary_via_staged_replacement() {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("pester-update-test-{unique}"));
+            fs::create_dir_all(&root).unwrap();
+
+            let source = root.join("pester-source");
+            let destination = root.join("bin").join("pester");
+            fs::write(&source, b"new-binary").unwrap();
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::write(&destination, b"old-binary").unwrap();
+
+            install_binary(&source, &destination).unwrap();
+
+            assert_eq!(fs::read(&destination).unwrap(), b"new-binary");
+            assert!(!destination.with_extension("new").exists());
+
+            let _ = fs::remove_dir_all(&root);
         }
     }
 }
