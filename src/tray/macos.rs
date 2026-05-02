@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use objc2::rc::Retained;
+use objc2::MainThreadOnly;
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSInteger, NSObject, NSRunLoop,
-    NSString,
+    ns_string, MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSRunLoop, NSString,
 };
 
 use crate::activity::{RuntimeActivity, TrayState};
