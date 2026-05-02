@@ -7,6 +7,7 @@ use crate::activity::{ReminderTrayState, RuntimeActivity, TrayReminder};
 use crate::models::{Config, State};
 use crate::store::Store;
 
+#[cfg(target_os = "linux")]
 const TRAY_ICON_NAME: &str = "pester-tray-v4";
 const TRAY_ICON_FILENAME: &str = "pester-tray-v4.svg";
 const TRAY_ICON_SVG: &str = include_str!("../assets/icons/pester-tray.svg");
@@ -821,6 +822,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(non_snake_case)]
 mod platform {
     use anyhow::{Context, Result};
     use objc2::rc::Retained;
@@ -1025,7 +1027,7 @@ mod platform {
         mtm: MainThreadMarker,
         status_item: Retained<NSStatusItem>,
         button: Retained<NSStatusBarButton>,
-        image: Retained<NSImage>,
+        _image: Retained<NSImage>,
         menu: Option<Retained<NSMenu>>,
     }
 
@@ -1052,7 +1054,7 @@ mod platform {
                 mtm,
                 status_item,
                 button,
-                image,
+                _image: image,
                 menu: None,
             })
         }
