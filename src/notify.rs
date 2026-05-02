@@ -439,8 +439,7 @@ mod platform {
     use objc2::runtime::ProtocolObject;
     use objc2::{define_class, msg_send, MainThreadOnly};
     use objc2_foundation::{
-        MainThreadMarker, NSArray, NSError, NSNotification, NSObject, NSObjectProtocol, NSSet,
-        NSString,
+        MainThreadMarker, NSArray, NSError, NSObject, NSObjectProtocol, NSSet, NSString,
     };
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
@@ -529,7 +528,7 @@ mod platform {
                 _notification: &UNNotification,
                 completion_handler: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
             ) {
-                completion_handler.call(UNNotificationPresentationOptionNone);
+                completion_handler.call((UNNotificationPresentationOptionNone,));
             }
         }
     );
@@ -537,7 +536,7 @@ mod platform {
     impl NotificationDelegate {
         fn new(mtm: MainThreadMarker) -> Retained<Self> {
             let this = Self::alloc(mtm);
-            unsafe { msg_send![super(this), init] }
+            unsafe { msg_send![this, init] }
         }
     }
 
@@ -667,8 +666,8 @@ mod platform {
 
     fn handle_timer_response(response: &UNNotificationResponse) {
         let action = response.actionIdentifier();
-        let should_clear = action == *UNNotificationDismissActionIdentifier
-            || action == *UNNotificationDefaultActionIdentifier;
+        let should_clear = action.as_ref() == UNNotificationDismissActionIdentifier
+            || action.as_ref() == UNNotificationDefaultActionIdentifier;
         if !should_clear {
             return;
         }

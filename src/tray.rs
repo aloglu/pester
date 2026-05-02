@@ -789,6 +789,7 @@ mod platform {
 mod platform {
     use anyhow::{Context, Result};
     use chrono::Local;
+    use objc2::encode::{Encode, Encoding, RefEncode};
     use objc2::rc::Retained;
     use objc2::{extern_class, extern_conformance, extern_methods, MainThreadOnly};
     use objc2_foundation::{
@@ -809,6 +810,14 @@ mod platform {
 
     impl NSApplicationActivationPolicy {
         const ACCESSORY: Self = Self(1);
+    }
+
+    unsafe impl Encode for NSApplicationActivationPolicy {
+        const ENCODING: Encoding = NSInteger::ENCODING;
+    }
+
+    unsafe impl RefEncode for NSApplicationActivationPolicy {
+        const ENCODING_REF: Encoding = Encoding::Pointer(&Self::ENCODING);
     }
 
     extern_class!(
@@ -1013,7 +1022,7 @@ mod platform {
                 .context("macOS status item did not provide a button")?;
             let icon_path = super::ensure_embedded_tray_icon()?;
             let image_path = NSString::from_str(&icon_path.display().to_string());
-            let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &image_path)
+            let image = NSImage::initWithContentsOfFile(NSImage::alloc(mtm), &image_path)
                 .context("could not load embedded tray icon for macOS")?;
             image.setTemplate(false);
             button.setImage(Some(&image));
@@ -1081,14 +1090,14 @@ mod platform {
             }
 
             let next = NSDate::dateWithTimeIntervalSinceNow(1.0);
-            let _ = run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &next);
+            let _ = unsafe { run_loop.runMode_beforeDate(NSDefaultRunLoopMode, &next) };
         }
     }
 
     fn build_menu(mtm: MainThreadMarker, activity: &RuntimeActivity) -> Retained<NSMenu> {
         let menu = NSMenu::new(mtm);
         for title in summary_lines(activity) {
-            let item = label_menu_item(&title, true);
+            let item = label_menu_item(mtm, &title, true);
             menu.addItem(&item);
         }
         if !activity.timers.is_empty() && !activity.active_reminders.is_empty() {
@@ -1096,7 +1105,7 @@ mod platform {
             menu.addItem(&separator);
         }
         if !activity.timers.is_empty() {
-            let header = label_menu_item("Timers", true);
+            let header = label_menu_item(mtm, "Timers", true);
             menu.addItem(&header);
             for timer in &activity.timers {
                 let status = if timer.expired {
@@ -1104,7 +1113,7 @@ mod platform {
                 } else {
                     format!("{} left", remaining_string(timer.ends_at))
                 };
-                let item = label_menu_item(&format!("{}: {}", timer.title, status), false);
+                let item = label_menu_item(mtm, &format!("{}: {}", timer.title, status), false);
                 menu.addItem(&item);
             }
         }
@@ -1113,7 +1122,7 @@ mod platform {
                 let separator = NSMenuItem::separatorItem();
                 menu.addItem(&separator);
             }
-            let header = label_menu_item("Active reminders", true);
+            let header = label_menu_item(mtm, "Active reminders", true);
             menu.addItem(&header);
             for reminder in &activity.active_reminders {
                 let label = match reminder.state {
@@ -1128,17 +1137,17 @@ mod platform {
                         remaining_string(reminder.relevant_at)
                     ),
                 };
-                let item = label_menu_item(&label, false);
+                let item = label_menu_item(mtm, &label, false);
                 menu.addItem(&item);
             }
         }
         menu
     }
 
-    fn label_menu_item(title: &str, dimmed: bool) -> Retained<NSMenuItem> {
+    fn label_menu_item(mtm: MainThreadMarker, title: &str, dimmed: bool) -> Retained<NSMenuItem> {
         let title = NSString::from_str(title);
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(),
+            NSMenuItem::alloc(mtm),
             &title,
             None,
             ns_string!(""),
