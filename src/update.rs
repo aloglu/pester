@@ -248,13 +248,55 @@ mod platform {
         if !source.exists() {
             bail!("downloaded release did not contain pester.app");
         }
-        if destination.exists() {
-            fs::remove_dir_all(destination)
-                .with_context(|| format!("failed to remove {}", destination.display()))?;
+        let staged = staged_app_path(destination);
+        let backup = backup_app_path(destination);
+
+        if staged.exists() {
+            let _ = fs::remove_dir_all(&staged);
         }
-        copy_dir_all(source, destination)?;
-        make_executable(&destination.join("Contents/MacOS/pester"))?;
+        if backup.exists() {
+            let _ = fs::remove_dir_all(&backup);
+        }
+
+        copy_dir_all(source, &staged)?;
+        make_executable(&staged.join("Contents/MacOS/pester"))?;
+
+        if destination.exists() {
+            fs::rename(destination, &backup).with_context(|| {
+                format!(
+                    "failed to move existing app bundle {} aside to {}",
+                    destination.display(),
+                    backup.display()
+                )
+            })?;
+        }
+
+        if let Err(error) = fs::rename(&staged, destination) {
+            if backup.exists() && !destination.exists() {
+                let _ = fs::rename(&backup, destination);
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to replace {} with {}",
+                    destination.display(),
+                    staged.display()
+                )
+            });
+        }
+
+        if backup.exists() {
+            fs::remove_dir_all(&backup)
+                .with_context(|| format!("failed to remove {}", backup.display()))?;
+        }
         Ok(())
+    }
+
+    fn staged_app_path(destination: &Path) -> PathBuf {
+        destination.with_extension("new")
+    }
+
+    fn backup_app_path(destination: &Path) -> PathBuf {
+        destination.with_extension("old")
     }
 
     fn copy_dir_all(source: &Path, destination: &Path) -> Result<()> {
@@ -345,7 +387,7 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
-        use super::{artifact_name_for, install_binary};
+        use super::{artifact_name_for, install_app_bundle, install_binary};
         use std::fs;
         use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -394,6 +436,34 @@ mod platform {
 
             assert_eq!(fs::read(&destination).unwrap(), b"new-binary");
             assert!(!destination.with_extension("new").exists());
+
+            let _ = fs::remove_dir_all(&root);
+        }
+
+        #[test]
+        fn installs_app_bundle_via_staged_swap() {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!("pester-update-app-test-{unique}"));
+            let source = root.join("pester.app");
+            let destination = root.join("Applications").join("pester.app");
+
+            fs::create_dir_all(source.join("Contents/MacOS")).unwrap();
+            fs::write(source.join("Contents/MacOS/pester"), b"new-app-binary").unwrap();
+
+            fs::create_dir_all(destination.join("Contents/MacOS")).unwrap();
+            fs::write(destination.join("Contents/MacOS/pester"), b"old-app-binary").unwrap();
+
+            install_app_bundle(&source, &destination).unwrap();
+
+            assert_eq!(
+                fs::read(destination.join("Contents/MacOS/pester")).unwrap(),
+                b"new-app-binary"
+            );
+            assert!(!destination.with_extension("new").exists());
+            assert!(!destination.with_extension("old").exists());
 
             let _ = fs::remove_dir_all(&root);
         }
